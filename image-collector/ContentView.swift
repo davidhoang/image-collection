@@ -25,7 +25,6 @@ struct ContentView: View {
     @State private var selectedFolderURL: URL?
     @State private var imageFiles: [ImageFile] = []
     @State private var viewMode: ViewMode = .grid
-    @State private var sidebarExpanded: Bool = true
     @State private var selectedImageFileID: UUID? = nil
     @State private var showDeleteAlert: Bool = false
     @State private var dontAskAgain: Bool = UserDefaults.standard.bool(forKey: "dontAskDeleteConfirm")
@@ -40,16 +39,14 @@ struct ContentView: View {
     }
     
     var body: some View {
-        HStack(spacing: 0) {
+        NavigationSplitView {
             SidebarView(
                 folderURLs: folderURLs,
                 selectedFolderURL: selectedFolderURL,
-                sidebarExpanded: sidebarExpanded,
-                onToggleSidebar: { sidebarExpanded.toggle() },
                 onLinkFolder: linkFolder,
                 onSelectFolder: { selectedFolderURL = $0 }
             )
-            Divider()
+        } detail: {
             MainContentView(
                 imageFiles: imageFiles,
                 viewMode: $viewMode,
@@ -58,6 +55,7 @@ struct ContentView: View {
                 selectedFolderURL: selectedFolderURL
             )
         }
+        .navigationTitle("")
         .onAppear {
             // Optionally, load persisted folders here
         }
@@ -98,37 +96,19 @@ struct ContentView: View {
     private struct SidebarView: View {
         let folderURLs: [URL]
         let selectedFolderURL: URL?
-        let sidebarExpanded: Bool
-        let onToggleSidebar: () -> Void
         let onLinkFolder: () -> Void
         let onSelectFolder: (URL) -> Void
         var body: some View {
             VStack(alignment: .leading, spacing: 0) {
-                HStack {
-                    if sidebarExpanded {
-                        Text("Folders")
-                            .font(.headline)
-                    }
-                    Spacer()
-                    Button(action: onToggleSidebar) {
-                        Image(systemName: sidebarExpanded ? "chevron.left" : "chevron.right")
-                    }
-                    .buttonStyle(BorderlessButtonStyle())
-                    if sidebarExpanded {
-                        Button(action: onLinkFolder) {
-                            Image(systemName: "plus")
-                        }
-                        .buttonStyle(BorderlessButtonStyle())
-                    }
-                }
-                .padding([.top, .horizontal])
+                Text("Folders")
+                    .font(.headline)
+                    .padding([.top, .horizontal])
+
                 List {
                     ForEach(folderURLs, id: \.self) { url in
                         HStack {
                             Image(systemName: "folder")
-                            if sidebarExpanded {
-                                Text(url.lastPathComponent)
-                            }
+                            Text(url.lastPathComponent)
                         }
                         .contentShape(Rectangle())
                         .onTapGesture {
@@ -139,8 +119,16 @@ struct ContentView: View {
                 }
                 .listStyle(SidebarListStyle())
                 Spacer()
+
+                HStack {
+                    Button(action: onLinkFolder) {
+                        Label("Add Folder", systemImage: "plus")
+                    }
+                    .buttonStyle(BorderlessButtonStyle())
+                    .padding()
+                    Spacer()
+                }
             }
-            .frame(width: sidebarExpanded ? 200 : 40)
             .background(Color(NSColor.windowBackgroundColor))
         }
     }
@@ -153,10 +141,11 @@ struct ContentView: View {
         let selectedFolderURL: URL?
         var body: some View {
             VStack {
-                HeaderView(viewMode: $viewMode, selectedFolderURL: selectedFolderURL)
                 if imageFiles.isEmpty {
+                    Spacer()
                     Text("No images found. Link a folder to begin.")
                         .foregroundColor(.secondary)
+                    Spacer()
                 } else {
                     if viewMode == .grid {
                         ImageGridView(imageFiles: imageFiles, selectedImageFileID: selectedImageFileID, onSelectImage: onSelectImage)
@@ -165,30 +154,17 @@ struct ContentView: View {
                     }
                 }
             }
-            .frame(minWidth: 600, minHeight: 600)
-        }
-    }
-    
-    private struct HeaderView: View {
-        @Binding var viewMode: ContentView.ViewMode
-        let selectedFolderURL: URL?
-        var body: some View {
-            HStack {
-                Picker("View", selection: $viewMode) {
-                    ForEach(ContentView.ViewMode.allCases) { mode in
-                        Text(mode.rawValue).tag(mode)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .toolbar {
+                ToolbarItem(placement: .principal) {
+                    Picker("View", selection: $viewMode) {
+                        ForEach(ContentView.ViewMode.allCases) { mode in
+                            Text(mode.rawValue).tag(mode)
+                        }
                     }
-                }
-                .pickerStyle(SegmentedPickerStyle())
-                Spacer()
-                if let selectedFolderURL = selectedFolderURL {
-                    Text("Linked: \(selectedFolderURL.path)")
-                        .font(.caption)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
+                    .pickerStyle(SegmentedPickerStyle())
                 }
             }
-            .padding()
         }
     }
     
