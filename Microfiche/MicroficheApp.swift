@@ -1,6 +1,6 @@
 //
-//  image_collectorApp.swift
-//  image-collector
+//  MicroficheApp.swift
+//  Microfiche
 //
 //  Created by David Hoang on 6/8/25.
 //
@@ -8,7 +8,7 @@
 import SwiftUI
 
 @main
-struct image_collectorApp: App {
+struct MicroficheApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()

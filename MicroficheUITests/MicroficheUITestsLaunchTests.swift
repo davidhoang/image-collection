@@ -1,13 +1,13 @@
 //
-//  image_collectorUITestsLaunchTests.swift
-//  image-collectorUITests
+//  MicroficheUITestsLaunchTests.swift
+//  MicroficheUITests
 //
 //  Created by David Hoang on 6/8/25.
 //
 
 import XCTest
 
-final class image_collectorUITestsLaunchTests: XCTestCase {
+final class MicroficheUITestsLaunchTests: XCTestCase {
 
     override class var runsForEachTargetApplicationUIConfiguration: Bool {
         true
