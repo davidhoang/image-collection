@@ -6,6 +6,7 @@
 //
 import SwiftUI
 import PDFKit
+import ImageIO
 
 struct ImageFile: Identifiable, Equatable, Hashable {
     let id = UUID()
@@ -25,10 +26,15 @@ struct ContentView: View {
     @State private var selectedFolderURL: URL?
     @State private var imageFiles: [ImageFile] = []
     @State private var viewMode: ViewMode = .grid
-    @State private var selectedImageFileID: UUID? = nil
+    @State private var gridThumbnailSize: GridThumbnailSize = .medium
+    @State private var selectedImageFileIDs: Set<UUID> = []
+    @State private var lastSelectedImageFileID: UUID?
     @State private var showDeleteAlert: Bool = false
     @State private var dontAskAgain: Bool = UserDefaults.standard.bool(forKey: "dontAskDeleteConfirm")
-    @State private var pendingDeleteFile: ImageFile? = nil
+    @State private var pendingDeleteFiles: [ImageFile] = []
+    @State private var previewedImageFile: ImageFile?
+    @State private var scrollToID: UUID?
+    @State private var gridColumnCount: Int = 1
     
     let supportedExtensions = ["jpg", "jpeg", "png", "pdf", "svg", "gif", "tiff"]
     
@@ -38,59 +44,120 @@ struct ContentView: View {
         var id: String { rawValue }
     }
     
+    enum GridThumbnailSize: String, CaseIterable, Identifiable {
+        case small = "Small"
+        case medium = "Medium"
+        case large = "Large"
+        var id: String { rawValue }
+    }
+    
+    enum ArrowDirection {
+        case up, down, left, right
+    }
+    
     var body: some View {
-        NavigationSplitView {
-            SidebarView(
-                folderURLs: folderURLs,
-                selectedFolderURL: selectedFolderURL,
-                onLinkFolder: linkFolder,
-                onSelectFolder: { selectedFolderURL = $0 }
-            )
-        } detail: {
-            MainContentView(
-                imageFiles: imageFiles,
-                viewMode: $viewMode,
-                selectedImageFileID: selectedImageFileID,
-                onSelectImage: { selectedImageFileID = $0 },
-                selectedFolderURL: selectedFolderURL
-            )
-        }
-        .navigationTitle("")
-        .onAppear {
-            // Optionally, load persisted folders here
-        }
-        .onChange(of: selectedFolderURL) { oldValue, newValue in
-            if let url = newValue {
-                loadImages(from: url)
-            } else {
-                imageFiles = []
+        ZStack {
+            NavigationSplitView {
+                SidebarView(
+                    folderURLs: folderURLs,
+                    selectedFolderURL: selectedFolderURL,
+                    onLinkFolder: linkFolder,
+                    onSelectFolder: { url in
+                        selectedFolderURL = url
+                        selectedImageFileIDs = []
+                        lastSelectedImageFileID = nil
+                    }
+                )
+            } detail: {
+                MainContentView(
+                    imageFiles: imageFiles,
+                    viewMode: $viewMode,
+                    gridThumbnailSize: $gridThumbnailSize,
+                    gridColumnCount: $gridColumnCount,
+                    selectedImageFileIDs: $selectedImageFileIDs,
+                    onSelectImage: handleImageSelection,
+                    selectedFolderURL: selectedFolderURL,
+                    scrollToID: $scrollToID
+                )
             }
-        }
-        .background(KeyboardEventHandlingView(onDeletePressed: {
-            if let file = imageFiles.first(where: { $0.id == selectedImageFileID }) {
-                if dontAskAgain {
-                    moveFileToTrash(file)
+            .navigationTitle("")
+            .onAppear {
+                // Optionally, load persisted folders here
+            }
+            .onChange(of: selectedFolderURL) { oldValue, newValue in
+                if let url = newValue {
+                    loadImages(from: url)
                 } else {
-                    pendingDeleteFile = file
-                    showDeleteAlert = true
+                    imageFiles = []
                 }
             }
-        }))
-        .alert(isPresented: $showDeleteAlert) {
-            Alert(
-                title: Text("Move to Trash?"),
-                message: Text("Are you sure you want to move \(pendingDeleteFile?.name ?? "this file") to the Trash?"),
-                primaryButton: .destructive(Text("Move to Trash")) {
-                    if let file = pendingDeleteFile {
-                        moveFileToTrash(file)
+            .onChange(of: showDeleteAlert) { _, isShowing in
+                if !isShowing {
+                    pendingDeleteFiles = []
+                }
+            }
+            .background(KeyboardEventHandlingView(
+                onDeletePressed: {
+                    let filesToDelete = imageFiles.filter { selectedImageFileIDs.contains($0.id) }
+                    if !filesToDelete.isEmpty {
                         if dontAskAgain {
-                            UserDefaults.standard.set(true, forKey: "dontAskDeleteConfirm")
+                            moveFilesToTrash(filesToDelete)
+                        } else {
+                            pendingDeleteFiles = filesToDelete
+                            showDeleteAlert = true
                         }
                     }
                 },
-                secondaryButton: .cancel()
-            )
+                onEscapePressed: {
+                    if previewedImageFile != nil {
+                        previewedImageFile = nil
+                    } else if !selectedImageFileIDs.isEmpty {
+                        selectedImageFileIDs = []
+                        lastSelectedImageFileID = nil
+                    }
+                },
+                onSpacebarPressed: {
+                    if previewedImageFile != nil {
+                        previewedImageFile = nil
+                        return
+                    }
+                    
+                    guard !selectedImageFileIDs.isEmpty else { return }
+
+                    let idToPreview = selectedImageFileIDs.count == 1 ? selectedImageFileIDs.first : lastSelectedImageFileID
+                    
+                    if let id = idToPreview, let file = imageFiles.first(where: { $0.id == id }) {
+                        previewedImageFile = file
+                    }
+                },
+                onArrowPressed: handleArrowKey
+            ))
+            .alert("Move to Trash?", isPresented: $showDeleteAlert) {
+                Button("Move to Trash", role: .destructive) {
+                    moveFilesToTrash(pendingDeleteFiles)
+                    if dontAskAgain {
+                        UserDefaults.standard.set(true, forKey: "dontAskDeleteConfirm")
+                    }
+                }
+                .keyboardShortcut(.defaultAction)
+
+                Button("Cancel", role: .cancel) { }
+            } message: {
+                let fileCount = pendingDeleteFiles.count
+                let messageText = fileCount == 1 ?
+                    "Are you sure you want to move \(pendingDeleteFiles.first?.name ?? "this file") to the Trash?" :
+                    "Are you sure you want to move \(fileCount) items to the Trash?"
+                Text(messageText)
+            }
+            
+            if let file = previewedImageFile {
+                PreviewView(file: file) {
+                    previewedImageFile = nil
+                }
+                .transition(.opacity)
+            }
         }
+        .animation(.easeInOut(duration: 0.2), value: previewedImageFile)
     }
     
     private struct SidebarView: View {
@@ -136,9 +203,12 @@ struct ContentView: View {
     private struct MainContentView: View {
         let imageFiles: [ImageFile]
         @Binding var viewMode: ContentView.ViewMode
-        let selectedImageFileID: UUID?
+        @Binding var gridThumbnailSize: ContentView.GridThumbnailSize
+        @Binding var gridColumnCount: Int
+        @Binding var selectedImageFileIDs: Set<UUID>
         let onSelectImage: (UUID) -> Void
         let selectedFolderURL: URL?
+        @Binding var scrollToID: UUID?
         var body: some View {
             VStack {
                 if imageFiles.isEmpty {
@@ -148,9 +218,9 @@ struct ContentView: View {
                     Spacer()
                 } else {
                     if viewMode == .grid {
-                        ImageGridView(imageFiles: imageFiles, selectedImageFileID: selectedImageFileID, onSelectImage: onSelectImage)
+                        ImageGridView(imageFiles: imageFiles, selectedImageFileIDs: $selectedImageFileIDs, onSelectImage: onSelectImage, thumbnailSize: gridThumbnailSize, scrollToID: $scrollToID, columnCount: $gridColumnCount)
                     } else {
-                        ImageListView(imageFiles: imageFiles, selectedImageFileID: selectedImageFileID, onSelectImage: onSelectImage)
+                        ImageListView(imageFiles: imageFiles, selectedImageFileIDs: $selectedImageFileIDs, onSelectImage: onSelectImage, scrollToID: $scrollToID)
                     }
                 }
             }
@@ -164,74 +234,152 @@ struct ContentView: View {
                     }
                     .pickerStyle(SegmentedPickerStyle())
                 }
+
+                if viewMode == .grid {
+                    ToolbarItem {
+                        Picker("Size", selection: $gridThumbnailSize) {
+                            ForEach(ContentView.GridThumbnailSize.allCases) { size in
+                                Text(size.rawValue).tag(size)
+                            }
+                        }
+                        .pickerStyle(SegmentedPickerStyle())
+                        .frame(width: 150)
+                        .padding(.trailing)
+                    }
+                }
             }
         }
     }
     
     private struct ImageGridView: View {
         let imageFiles: [ImageFile]
-        let selectedImageFileID: UUID?
+        @Binding var selectedImageFileIDs: Set<UUID>
         let onSelectImage: (UUID) -> Void
+        let thumbnailSize: ContentView.GridThumbnailSize
+        @Binding var scrollToID: UUID?
+        @Binding var columnCount: Int
+
+        private var itemSize: CGFloat {
+            switch thumbnailSize {
+            case .small: return 80
+            case .medium: return 120
+            case .large: return 160
+            }
+        }
+
+        private var columns: [GridItem] {
+            [GridItem(.adaptive(minimum: itemSize))]
+        }
+
         var body: some View {
-            ScrollView {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 100))]) {
-                    ForEach(imageFiles) { file in
-                        VStack {
-                            FileThumbnailView(file: file)
-                                .frame(width: 80, height: 80)
-                                .background(selectedImageFileID == file.id ? Color.accentColor.opacity(0.3) : Color.gray.opacity(0.1))
-                                .cornerRadius(8)
-                                .onTapGesture {
-                                    onSelectImage(file.id)
+            GeometryReader { geometry in
+                ScrollViewReader { proxy in
+                    ScrollView {
+                        LazyVGrid(columns: columns) {
+                            ForEach(imageFiles) { file in
+                                VStack {
+                                    FileThumbnailView(file: file, size: itemSize - 20)
+                                        .frame(width: itemSize - 20, height: itemSize - 20)
+                                        .background(selectedImageFileIDs.contains(file.id) ? Color.accentColor.opacity(0.3) : Color.gray.opacity(0.1))
+                                        .cornerRadius(8)
+                                        .onTapGesture {
+                                            onSelectImage(file.id)
+                                        }
+                                    Text(file.name)
+                                        .font(.caption)
+                                        .lineLimit(1)
                                 }
-                            Text(file.name)
-                                .font(.caption)
-                                .lineLimit(1)
+                                .frame(width: itemSize, height: itemSize)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 8)
+                                        .stroke(selectedImageFileIDs.contains(file.id) ? Color.accentColor : Color.clear, lineWidth: 2)
+                                )
+                                .id(file.id)
+                            }
                         }
-                        .frame(width: 100, height: 100)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 8)
-                                .stroke(selectedImageFileID == file.id ? Color.accentColor : Color.clear, lineWidth: 2)
-                        )
+                        .padding()
+                    }
+                    .onChange(of: scrollToID) { _, newID in
+                        if let id = newID {
+                            withAnimation {
+                                proxy.scrollTo(id, anchor: .center)
+                            }
+                            DispatchQueue.main.async {
+                                scrollToID = nil
+                            }
+                        }
                     }
                 }
-                .padding()
+                .onAppear {
+                    recalculateColumnCount(width: geometry.size.width)
+                }
+                .onChange(of: geometry.size.width) { _, newWidth in
+                    recalculateColumnCount(width: newWidth)
+                }
+            }
+        }
+        
+        private func recalculateColumnCount(width: CGFloat) {
+            // Standard SwiftUI padding is ~16. LazyVGrid default spacing is ~8.
+            let horizontalPadding: CGFloat = 32
+            let spacing: CGFloat = 8
+            let availableWidth = width - horizontalPadding
+            
+            // Formula for adaptive grid: N = floor((W + S) / (I + S))
+            let newColumnCount = Int((availableWidth + spacing) / (itemSize + spacing))
+
+            if newColumnCount > 0 && self.columnCount != newColumnCount {
+                self.columnCount = newColumnCount
             }
         }
     }
     
     private struct ImageListView: View {
         let imageFiles: [ImageFile]
-        let selectedImageFileID: UUID?
+        @Binding var selectedImageFileIDs: Set<UUID>
         let onSelectImage: (UUID) -> Void
+        @Binding var scrollToID: UUID?
         var body: some View {
-            List {
-                ForEach(imageFiles) { file in
-                    HStack {
-                        FileThumbnailView(file: file)
-                            .frame(width: 40, height: 40)
-                            .background(Color.gray.opacity(0.1))
-                            .cornerRadius(6)
-                        VStack(alignment: .leading) {
-                            Text(file.name)
-                                .font(.body)
-                                .lineLimit(1)
-                            Text(file.url.path)
-                                .font(.caption2)
-                                .foregroundColor(.secondary)
-                                .lineLimit(1)
+            ScrollViewReader { proxy in
+                List {
+                    ForEach(imageFiles) { file in
+                        HStack {
+                            FileThumbnailView(file: file, size: 40)
+                                .frame(width: 40, height: 40)
+                                .background(Color.gray.opacity(0.1))
+                                .cornerRadius(6)
+                            VStack(alignment: .leading) {
+                                Text(file.name)
+                                    .font(.body)
+                                    .lineLimit(1)
+                                Text(file.url.path)
+                                    .font(.caption2)
+                                    .foregroundColor(.secondary)
+                                    .lineLimit(1)
+                            }
+                            Spacer()
                         }
-                        Spacer()
+                        .padding(.vertical, 2)
+                        .contentShape(Rectangle())
+                        .onTapGesture {
+                            onSelectImage(file.id)
+                        }
+                        .background(selectedImageFileIDs.contains(file.id) ? Color.accentColor.opacity(0.2) : Color.clear)
+                        .id(file.id)
                     }
-                    .padding(.vertical, 2)
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        onSelectImage(file.id)
+                }
+                .listStyle(PlainListStyle())
+                .onChange(of: scrollToID) { _, newID in
+                    if let id = newID {
+                        withAnimation {
+                            proxy.scrollTo(id, anchor: .center)
+                        }
+                        DispatchQueue.main.async {
+                            scrollToID = nil
+                        }
                     }
-                    .background(selectedImageFileID == file.id ? Color.accentColor.opacity(0.2) : Color.clear)
                 }
             }
-            .listStyle(PlainListStyle())
         }
     }
     
@@ -247,6 +395,8 @@ struct ContentView: View {
                 }
                 selectedFolderURL = url
                 loadImages(from: url)
+                selectedImageFileIDs = []
+                lastSelectedImageFileID = nil
             }
         }
     }
@@ -268,46 +418,168 @@ struct ContentView: View {
         imageFiles = foundFiles
     }
     
-    func moveFileToTrash(_ file: ImageFile) {
+    func moveFilesToTrash(_ files: [ImageFile]) {
+        let fileURLs = files.map { $0.url }
         let ws = NSWorkspace.shared
-        ws.recycle([file.url]) { (newURLs, error) in
+        ws.recycle(fileURLs) { (newURLs, error) in
             if error == nil {
-                imageFiles.removeAll { $0.id == file.id }
-                if selectedImageFileID == file.id {
-                    selectedImageFileID = nil
+                DispatchQueue.main.async {
+                    let idsToRemove = Set(files.map { $0.id })
+                    imageFiles.removeAll { idsToRemove.contains($0.id) }
+                    selectedImageFileIDs.subtract(idsToRemove)
+                    if let lastID = self.lastSelectedImageFileID, idsToRemove.contains(lastID) {
+                        self.lastSelectedImageFileID = nil
+                    }
                 }
             } else {
                 // Optionally, show an error to the user
+                print("Error recycling files: \(error?.localizedDescription ?? "unknown error")")
             }
+        }
+    }
+    
+    private func handleArrowKey(_ direction: ArrowDirection) {
+        if previewedImageFile != nil {
+            guard direction == .left || direction == .right else { return }
+            let offset = direction == .left ? -1 : 1
+            
+            guard let currentFile = previewedImageFile, let currentIndex = imageFiles.firstIndex(of: currentFile) else { return }
+            let newIndex = (currentIndex + offset + imageFiles.count) % imageFiles.count
+            previewedImageFile = imageFiles[newIndex]
+
+        } else {
+            guard !imageFiles.isEmpty else { return }
+
+            let offset: Int
+            if viewMode == .grid {
+                switch direction {
+                case .up: offset = -gridColumnCount
+                case .down: offset = gridColumnCount
+                case .left: offset = -1
+                case .right: offset = 1
+                }
+            } else { // List Mode
+                switch direction {
+                case .up, .left: offset = -1
+                case .down, .right: offset = 1
+                }
+            }
+            
+            let newID: UUID
+            if let lastID = lastSelectedImageFileID, let currentIndex = imageFiles.firstIndex(where: { $0.id == lastID }) {
+                let newIndex = currentIndex + offset
+                
+                if viewMode == .grid {
+                    if direction == .left && currentIndex % gridColumnCount == 0 { return }
+                    if direction == .right && (currentIndex % gridColumnCount == gridColumnCount - 1 || currentIndex == imageFiles.count - 1) { return }
+                }
+
+                guard (0..<imageFiles.count).contains(newIndex) else { return }
+                newID = imageFiles[newIndex].id
+
+            } else {
+                newID = imageFiles[0].id
+            }
+
+            selectedImageFileIDs = [newID]
+            lastSelectedImageFileID = newID
+            scrollToID = newID
+        }
+    }
+
+    private func handleImageSelection(for fileID: UUID) {
+        let modifiers = NSEvent.modifierFlags
+        let isCommandPressed = modifiers.contains(.command)
+        let isShiftPressed = modifiers.contains(.shift)
+
+        if isShiftPressed, let lastID = lastSelectedImageFileID,
+           let lastIndex = imageFiles.firstIndex(where: { $0.id == lastID }),
+           let currentIndex = imageFiles.firstIndex(where: { $0.id == fileID })
+        {
+            let range = min(lastIndex, currentIndex)...max(lastIndex, currentIndex)
+            let idsToSelect = imageFiles[range].map { $0.id }
+            if isCommandPressed {
+                selectedImageFileIDs.formUnion(idsToSelect)
+            } else {
+                selectedImageFileIDs = Set(idsToSelect)
+            }
+        } else if isCommandPressed {
+            if selectedImageFileIDs.contains(fileID) {
+                selectedImageFileIDs.remove(fileID)
+            } else {
+                selectedImageFileIDs.insert(fileID)
+            }
+            lastSelectedImageFileID = fileID
+        } else {
+            selectedImageFileIDs = [fileID]
+            lastSelectedImageFileID = fileID
         }
     }
 }
 
 struct FileThumbnailView: View {
     let file: ImageFile
+    let size: CGFloat
+    @State private var thumbnailImage: NSImage?
     
     var body: some View {
-        if ["jpg", "jpeg", "png", "gif", "tiff"].contains(file.url.pathExtension.lowercased()) {
-            if let nsImage = NSImage(contentsOf: file.url) {
-                Image(nsImage: nsImage)
+        Group {
+            if let image = thumbnailImage {
+                Image(nsImage: image)
                     .resizable()
                     .scaledToFit()
             } else {
                 placeholder
             }
-        } else if file.url.pathExtension.lowercased() == "pdf" {
-            if let pdfDoc = PDFDocument(url: file.url), let page = pdfDoc.page(at: 0) {
-                let pdfThumb = page.thumbnail(of: NSSize(width: 80, height: 80), for: .cropBox)
-                Image(nsImage: pdfThumb)
-                    .resizable()
-                    .scaledToFit()
-            } else {
-                placeholder
-            }
-        } else {
-            // SVG or unsupported
-            placeholder
         }
+        .onAppear(perform: generateThumbnail)
+        .onChange(of: file) {
+            generateThumbnail()
+        }
+        .onChange(of: size) {
+            generateThumbnail()
+        }
+    }
+    
+    private func generateThumbnail() {
+        DispatchQueue.global(qos: .userInitiated).async {
+            let image: NSImage?
+            let thumbnailSize = CGSize(width: size * 2, height: size * 2) // Retina size for view size
+
+            if ["jpg", "jpeg", "png", "gif", "tiff"].contains(file.url.pathExtension.lowercased()) {
+                image = createThumbnail(for: file.url, size: thumbnailSize)
+            } else if file.url.pathExtension.lowercased() == "pdf" {
+                if let pdfDoc = PDFDocument(url: file.url), let page = pdfDoc.page(at: 0) {
+                    image = page.thumbnail(of: thumbnailSize, for: .cropBox)
+                } else {
+                    image = nil
+                }
+            } else if file.url.pathExtension.lowercased() == "svg" {
+                // For SVGs, we can load them directly as they are vector-based.
+                image = NSImage(contentsOf: file.url)
+            } else {
+                image = nil
+            }
+            
+            DispatchQueue.main.async {
+                self.thumbnailImage = image
+            }
+        }
+    }
+
+    private func createThumbnail(for url: URL, size: CGSize) -> NSImage? {
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceThumbnailMaxPixelSize: max(size.width, size.height)
+        ]
+
+        guard let imageSource = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let cgImage = CGImageSourceCreateThumbnailAtIndex(imageSource, 0, options as CFDictionary) else {
+            // Fallback to loading the full image if thumbnail creation fails
+            return NSImage(contentsOf: url)
+        }
+        return NSImage(cgImage: cgImage, size: .zero)
     }
     
     var placeholder: some View {
@@ -319,21 +591,92 @@ struct FileThumbnailView: View {
     }
 }
 
+struct PreviewView: View {
+    let file: ImageFile
+    let onDismiss: () -> Void
+    
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.7)
+                .edgesIgnoringSafeArea(.all)
+                .onTapGesture(perform: onDismiss)
+
+            VStack(spacing: 16) {
+                Group {
+                    if ["jpg", "jpeg", "png", "gif", "tiff", "svg"].contains(file.url.pathExtension.lowercased()) {
+                        if let nsImage = NSImage(contentsOf: file.url) {
+                            Image(nsImage: nsImage)
+                                .resizable()
+                                .scaledToFit()
+                        } else {
+                            previewError
+                        }
+                    } else if file.url.pathExtension.lowercased() == "pdf" {
+                        if let pdfDoc = PDFDocument(url: file.url), let page = pdfDoc.page(at: 0) {
+                            let pageRect = page.bounds(for: .cropBox)
+                            let image = page.thumbnail(of: NSSize(width: pageRect.width, height: pageRect.height), for: .cropBox)
+                            Image(nsImage: image)
+                                .resizable()
+                                .scaledToFit()
+                        } else {
+                            previewError
+                        }
+                    } else {
+                        previewError
+                    }
+                }
+                .shadow(radius: 20)
+
+                Text(file.name)
+                    .font(.headline)
+                    .foregroundColor(.white)
+                    .padding(.top)
+            }
+            .padding(40)
+        }
+    }
+    
+    var previewError: some View {
+        Text("Cannot preview this file type.")
+            .foregroundColor(.white)
+    }
+}
+
 struct KeyboardEventHandlingView: NSViewRepresentable {
     var onDeletePressed: () -> Void
+    var onEscapePressed: () -> Void
+    var onSpacebarPressed: () -> Void
+    var onArrowPressed: (ContentView.ArrowDirection) -> Void
+
     func makeNSView(context: Context) -> NSView {
         let view = KeyCatcherView()
         view.onDeletePressed = onDeletePressed
+        view.onEscapePressed = onEscapePressed
+        view.onSpacebarPressed = onSpacebarPressed
+        view.onArrowPressed = onArrowPressed
         return view
     }
     func updateNSView(_ nsView: NSView, context: Context) {}
     class KeyCatcherView: NSView {
         var onDeletePressed: (() -> Void)?
+        var onEscapePressed: (() -> Void)?
+        var onSpacebarPressed: (() -> Void)?
+        var onArrowPressed: ((ContentView.ArrowDirection) -> Void)?
+
         override var acceptsFirstResponder: Bool { true }
         override func keyDown(with event: NSEvent) {
-            if event.keyCode == 51 { // Delete key
+            switch event.keyCode {
+            case 51: // Delete
                 onDeletePressed?()
-            } else {
+            case 53: // Escape
+                onEscapePressed?()
+            case 49: // Spacebar
+                onSpacebarPressed?()
+            case 123: onArrowPressed?(.left)
+            case 124: onArrowPressed?(.right)
+            case 125: onArrowPressed?(.down)
+            case 126: onArrowPressed?(.up)
+            default:
                 super.keyDown(with: event)
             }
         }
