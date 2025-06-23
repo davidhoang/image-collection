@@ -23,7 +23,7 @@ struct ImageFile: Identifiable, Equatable, Hashable {
 
 struct ContentView: View {
     @State private var folderURLs: [URL] = []
-    @State private var selectedFolderURL: URL?
+    @State private var selection: Selection?
     @State private var imageFiles: [ImageFile] = []
     @State private var viewMode: ViewMode = .grid
     @State private var gridThumbnailSize: GridThumbnailSize = .medium
@@ -37,6 +37,11 @@ struct ContentView: View {
     @State private var gridColumnCount: Int = 1
     
     let supportedExtensions = ["jpg", "jpeg", "png", "pdf", "svg", "gif", "tiff"]
+    
+    enum Selection: Hashable {
+        case all
+        case folder(URL)
+    }
     
     enum ViewMode: String, CaseIterable, Identifiable {
         case grid = "Grid"
@@ -60,13 +65,12 @@ struct ContentView: View {
             NavigationSplitView {
                 SidebarView(
                     folderURLs: folderURLs,
-                    selectedFolderURL: selectedFolderURL,
+                    selection: selection,
                     onLinkFolder: linkFolder,
-                    onSelectFolder: { url in
-                        selectedFolderURL = url
-                        selectedImageFileIDs = []
-                        lastSelectedImageFileID = nil
-                    }
+                    onSelect: { newSelection in
+                        selection = newSelection
+                    },
+                    onRemoveFolder: removeFolder
                 )
             } detail: {
                 MainContentView(
@@ -76,7 +80,6 @@ struct ContentView: View {
                     gridColumnCount: $gridColumnCount,
                     selectedImageFileIDs: $selectedImageFileIDs,
                     onSelectImage: handleImageSelection,
-                    selectedFolderURL: selectedFolderURL,
                     scrollToID: $scrollToID,
                     onRename: renameFile
                 )
@@ -85,12 +88,17 @@ struct ContentView: View {
             .onAppear {
                 // Optionally, load persisted folders here
             }
-            .onChange(of: selectedFolderURL) { oldValue, newValue in
-                if let url = newValue {
-                    loadImages(from: url)
-                } else {
+            .onChange(of: selection) { oldValue, newValue in
+                switch newValue {
+                case .all:
+                    loadImages(from: folderURLs)
+                case .folder(let url):
+                    loadImages(from: [url])
+                case .none:
                     imageFiles = []
                 }
+                selectedImageFileIDs = []
+                lastSelectedImageFileID = nil
             }
             .onChange(of: showDeleteAlert) { _, isShowing in
                 if !isShowing {
@@ -173,20 +181,22 @@ struct ContentView: View {
                     folderURLs.append(url)
                 }
             }
-            if selectedFolderURL == nil {
-                selectedFolderURL = openPanel.urls.first
+            if selection == nil, let firstURL = openPanel.urls.first {
+                selection = .folder(firstURL)
             }
         }
     }
     
-    private func loadImages(from folderURL: URL) {
+    private func loadImages(from folderURLs: [URL]) {
         var newImageFiles: [ImageFile] = []
         let fileManager = FileManager.default
         
-        if let enumerator = fileManager.enumerator(at: folderURL, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles, .skipsPackageDescendants]) {
-            for case let fileURL as URL in enumerator {
-                if supportedExtensions.contains(fileURL.pathExtension.lowercased()) {
-                    newImageFiles.append(ImageFile(url: fileURL))
+        for folderURL in folderURLs {
+            if let enumerator = fileManager.enumerator(at: folderURL, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles, .skipsPackageDescendants]) {
+                for case let fileURL as URL in enumerator {
+                    if supportedExtensions.contains(fileURL.pathExtension.lowercased()) {
+                        newImageFiles.append(ImageFile(url: fileURL))
+                    }
                 }
             }
         }
@@ -223,6 +233,33 @@ struct ContentView: View {
     
     private func handleArrowKey(_ direction: ArrowDirection) {
         guard !imageFiles.isEmpty else { return }
+
+        if let currentFile = previewedImageFile, let currentIndex = imageFiles.firstIndex(of: currentFile) {
+            var nextIndex: Int?
+            
+            switch direction {
+            case .left:
+                if currentIndex > 0 {
+                    nextIndex = currentIndex - 1
+                }
+            case .right:
+                if currentIndex < imageFiles.count - 1 {
+                    nextIndex = currentIndex + 1
+                }
+            default:
+                break // Up/Down do nothing in preview
+            }
+            
+            if let newIndex = nextIndex {
+                let nextFile = imageFiles[newIndex]
+                previewedImageFile = nextFile
+                // Also update selection to follow the preview
+                selectedImageFileIDs = [nextFile.id]
+                lastSelectedImageFileID = nextFile.id
+                scrollToID = nextFile.id
+            }
+            return // End here if we were in preview mode
+        }
 
         let sortedFiles = imageFiles
         
@@ -284,6 +321,22 @@ struct ContentView: View {
         }
     }
     
+    private func removeFolder(_ url: URL) {
+        if let index = folderURLs.firstIndex(of: url) {
+            let wasSelected = (selection == .folder(url))
+            folderURLs.remove(at: index)
+
+            if wasSelected {
+                if !folderURLs.isEmpty {
+                    let newIndex = min(index, folderURLs.count - 1)
+                    selection = .folder(folderURLs[newIndex])
+                } else {
+                    selection = .all
+                }
+            }
+        }
+    }
+    
     private struct EditableFileNameView: View {
         let file: ImageFile
         let onRename: (URL, String) -> Void
@@ -325,9 +378,10 @@ struct ContentView: View {
     
     private struct SidebarView: View {
         let folderURLs: [URL]
-        let selectedFolderURL: URL?
+        let selection: Selection?
         let onLinkFolder: () -> Void
-        let onSelectFolder: (URL) -> Void
+        let onSelect: (Selection) -> Void
+        let onRemoveFolder: (URL) -> Void
         var body: some View {
             VStack(alignment: .leading, spacing: 0) {
                 Text("Folders")
@@ -335,6 +389,16 @@ struct ContentView: View {
                     .padding([.top, .horizontal])
 
                 List {
+                    HStack {
+                        Image(systemName: "photo.stack")
+                        Text("All")
+                    }
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        onSelect(.all)
+                    }
+                    .background(selection == .all ? Color.accentColor.opacity(0.2) : Color.clear)
+                    
                     ForEach(folderURLs, id: \.self) { url in
                         HStack {
                             Image(systemName: "folder")
@@ -342,9 +406,14 @@ struct ContentView: View {
                         }
                         .contentShape(Rectangle())
                         .onTapGesture {
-                            onSelectFolder(url)
+                            onSelect(.folder(url))
                         }
-                        .background(selectedFolderURL == url ? Color.accentColor.opacity(0.2) : Color.clear)
+                        .background(selection == .folder(url) ? Color.accentColor.opacity(0.2) : Color.clear)
+                        .contextMenu {
+                            Button("Remove Folder", role: .destructive) {
+                                onRemoveFolder(url)
+                            }
+                        }
                     }
                 }
                 .listStyle(SidebarListStyle())
@@ -370,13 +439,16 @@ struct ContentView: View {
         @Binding var gridColumnCount: Int
         @Binding var selectedImageFileIDs: Set<UUID>
         let onSelectImage: (UUID) -> Void
-        let selectedFolderURL: URL?
         @Binding var scrollToID: UUID?
         let onRename: (URL, String) -> Void
         var body: some View {
             VStack {
                 if imageFiles.isEmpty {
                     Spacer()
+                    Image(systemName: "photo.on.rectangle.angled")
+                        .font(.system(size: 50))
+                        .foregroundColor(.secondary.opacity(0.6))
+                        .padding(.bottom)
                     Text("No images found. Link a folder to begin.")
                         .foregroundColor(.secondary)
                     Spacer()
@@ -461,9 +533,16 @@ struct ContentView: View {
                     }
                 }
                 .onChange(of: thumbnailSize) { _, newSize in
-                    columnCount = newSize == .large ? 3 : (newSize == .medium ? 5 : 8)
+                    updateColumnCount(for: newSize)
+                }
+                .onAppear {
+                    updateColumnCount(for: thumbnailSize)
                 }
             }
+        }
+        
+        private func updateColumnCount(for size: GridThumbnailSize) {
+            columnCount = size == .large ? 3 : (size == .medium ? 5 : 8)
         }
         
         private var thumbnailSizeValue: CGFloat {
