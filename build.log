@@ -1,0 +1,33 @@
+Command line invocation:
+    /Applications/Xcode.app/Contents/Developer/usr/bin/xcodebuild -project Microfiche.xcodeproj -scheme Microfiche -configuration Debug build
+
+ComputePackagePrebuildTargetDependencyGraph
+
+Prepare packages
+
+CreateBuildRequest
+
+SendProjectDescription
+
+CreateBuildOperation
+
+ComputeTargetDependencyGraph
+note: Building targets in dependency order
+note: Target dependency graph (1 target)
+    Target 'Microfiche' in project 'Microfiche' (no dependencies)
+
+GatherProvisioningInputs
+
+CreateBuildDescription
+
+ExecuteExternalTool /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/clang -v -E -dM -isysroot /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.5.sdk -x c -c /dev/null
+
+ExecuteExternalTool /Applications/Xcode.app/Contents/Developer/usr/bin/actool --version --output-format xml1
+
+ExecuteExternalTool /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/swiftc --version
+
+ExecuteExternalTool /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/ld -version_details
+
+Build description signature: de629c78302db1f7f922002086131633
+Build description path: /Users/dhoang4/Library/Developer/Xcode/DerivedData/Microfiche-fqrunuzgcrucgieunoigxhcsucbt/Build/Intermediates.noindex/XCBuildData/de629c78302db1f7f922002086131633.xcbuilddata
+/Users/dhoang4/Development/image-collection/Microfiche.xcodeproj: error: No signing certificate "Mac Development" found: No "Mac Development" signing certificate matching team ID "HUBHJCD848" with a private key was found. (in target 'Microfiche' from project 'Microfiche')
