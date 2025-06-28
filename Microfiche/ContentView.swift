@@ -207,6 +207,615 @@ struct ImageFile: Identifiable, Equatable, Hashable {
     }
 }
 
+// MARK: - Image Detail View
+struct ImageDetailView: View {
+    let file: ImageFile
+    let onBack: () -> Void
+    
+    @State private var tags: [String] = []
+    @State private var labels: [String] = []
+    @State private var comments: String = ""
+    @State private var whereFrom: String = ""
+    @State private var isEditingTags = false
+    @State private var isEditingLabels = false
+    @State private var isEditingComments = false
+    @State private var isEditingWhereFrom = false
+    @State private var newTag: String = ""
+    @State private var newLabel: String = ""
+    @State private var escapeMonitor: Any?
+    
+    var body: some View {
+        VStack(spacing: 0) {
+            // Header
+            HStack {
+                Button(action: onBack) {
+                    HStack {
+                        Image(systemName: "chevron.left")
+                        Text("Back")
+                    }
+                }
+                .buttonStyle(BorderlessButtonStyle())
+                
+                Spacer()
+                
+                Text(file.name)
+                    .font(.headline)
+                    .lineLimit(1)
+                
+                Spacer()
+                
+                // Placeholder for potential future actions
+                HStack(spacing: 16) {
+                    Button(action: {
+                        saveMetadata()
+                    }) {
+                        Image(systemName: "square.and.arrow.down")
+                    }
+                    .buttonStyle(BorderlessButtonStyle())
+                    .help("Save metadata")
+                    
+                    Button(action: {}) {
+                        Image(systemName: "square.and.arrow.up")
+                    }
+                    .buttonStyle(BorderlessButtonStyle())
+                    
+                    Button(action: {}) {
+                        Image(systemName: "ellipsis.circle")
+                    }
+                    .buttonStyle(BorderlessButtonStyle())
+                }
+            }
+            .padding()
+            .background(Color(NSColor.controlBackgroundColor))
+            
+            Divider()
+            
+            // Main content
+            HStack(spacing: 0) {
+                // Left side - Image
+                VStack {
+                    if file.url.pathExtension.lowercased() == "pdf" {
+                        PDFKitView(url: file.url)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    } else if file.url.pathExtension.lowercased() == "svg" {
+                        SVGImageView(url: file.url)
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .aspectRatio(contentMode: .fit)
+                    } else {
+                        AsyncImage(url: file.url) { image in
+                            image.resizable()
+                                 .aspectRatio(contentMode: .fit)
+                        } placeholder: {
+                            ProgressView()
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color(NSColor.windowBackgroundColor))
+                
+                Divider()
+                
+                // Right side - Metadata
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 24) {
+                        // Tags Section
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Text("Tags")
+                                    .font(.headline)
+                                Spacer()
+                                Button(action: { 
+                                    isEditingTags.toggle()
+                                    if !isEditingTags {
+                                        saveMetadata()
+                                    }
+                                }) {
+                                    Image(systemName: isEditingTags ? "checkmark" : "plus")
+                                }
+                                .buttonStyle(BorderlessButtonStyle())
+                            }
+                            
+                            if isEditingTags {
+                                HStack {
+                                    TextField("Add tag", text: $newTag)
+                                        .textFieldStyle(RoundedBorderTextFieldStyle())
+                                    Button("Add") {
+                                        if !newTag.isEmpty && !tags.contains(newTag) {
+                                            tags.append(newTag)
+                                            newTag = ""
+                                            saveMetadata()
+                                        }
+                                    }
+                                    .buttonStyle(BorderlessButtonStyle())
+                                }
+                            }
+                            
+                            if tags.isEmpty {
+                                Text("No tags")
+                                    .foregroundColor(.secondary)
+                                    .italic()
+                            } else {
+                                LazyVGrid(columns: Array(repeating: .init(.flexible()), count: 2), spacing: 8) {
+                                    ForEach(tags, id: \.self) { tag in
+                                        HStack {
+                                            Text(tag)
+                                                .padding(.horizontal, 8)
+                                                .padding(.vertical, 4)
+                                                .background(Color.accentColor.opacity(0.2))
+                                                .cornerRadius(8)
+                                            Spacer()
+                                            if isEditingTags {
+                                                Button(action: { 
+                                                    tags.removeAll { $0 == tag }
+                                                    saveMetadata()
+                                                }) {
+                                                    Image(systemName: "xmark.circle.fill")
+                                                        .foregroundColor(.red)
+                                                }
+                                                .buttonStyle(BorderlessButtonStyle())
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        
+                        // Labels Section
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Text("Labels")
+                                    .font(.headline)
+                                Spacer()
+                                Button(action: { 
+                                    isEditingLabels.toggle()
+                                    if !isEditingLabels {
+                                        saveMetadata()
+                                    }
+                                }) {
+                                    Image(systemName: isEditingLabels ? "checkmark" : "plus")
+                                }
+                                .buttonStyle(BorderlessButtonStyle())
+                            }
+                            
+                            if isEditingLabels {
+                                HStack {
+                                    TextField("Add label", text: $newLabel)
+                                        .textFieldStyle(RoundedBorderTextFieldStyle())
+                                    Button("Add") {
+                                        if !newLabel.isEmpty && !labels.contains(newLabel) {
+                                            labels.append(newLabel)
+                                            newLabel = ""
+                                            saveMetadata()
+                                        }
+                                    }
+                                    .buttonStyle(BorderlessButtonStyle())
+                                }
+                            }
+                            
+                            if labels.isEmpty {
+                                Text("No labels")
+                                    .foregroundColor(.secondary)
+                                    .italic()
+                            } else {
+                                LazyVGrid(columns: Array(repeating: .init(.flexible()), count: 2), spacing: 8) {
+                                    ForEach(labels, id: \.self) { label in
+                                        HStack {
+                                            Text(label)
+                                                .padding(.horizontal, 8)
+                                                .padding(.vertical, 4)
+                                                .background(Color.orange.opacity(0.2))
+                                                .cornerRadius(8)
+                                            Spacer()
+                                            if isEditingLabels {
+                                                Button(action: { 
+                                                    labels.removeAll { $0 == label }
+                                                    saveMetadata()
+                                                }) {
+                                                    Image(systemName: "xmark.circle.fill")
+                                                        .foregroundColor(.red)
+                                                }
+                                                .buttonStyle(BorderlessButtonStyle())
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        
+                        // Comments Section
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Text("Comments")
+                                    .font(.headline)
+                                Spacer()
+                                Button(action: {
+                                    isEditingComments.toggle()
+                                    if !isEditingComments {
+                                        saveMetadata()
+                                    }
+                                }) {
+                                    Image(systemName: isEditingComments ? "checkmark" : "pencil")
+                                }
+                                .buttonStyle(BorderlessButtonStyle())
+                            }
+                            if isEditingComments {
+                                TextEditor(text: $comments)
+                                    .frame(minHeight: 100)
+                                    .textFieldStyle(RoundedBorderTextFieldStyle())
+                                    .onChange(of: comments) { _, _ in
+                                        saveMetadata()
+                                    }
+                            } else {
+                                if comments.isEmpty {
+                                    Text("No comments")
+                                        .foregroundColor(.secondary)
+                                        .italic()
+                                } else {
+                                    Text(comments)
+                                        .textSelection(.enabled)
+                                }
+                            }
+                        }
+                        
+                        // Where From Section
+                        VStack(alignment: .leading, spacing: 8) {
+                            HStack {
+                                Text("Where From")
+                                    .font(.headline)
+                                Spacer()
+                                Button(action: {
+                                    isEditingWhereFrom.toggle()
+                                    if !isEditingWhereFrom {
+                                        saveMetadata()
+                                    }
+                                }) {
+                                    Image(systemName: isEditingWhereFrom ? "checkmark" : "pencil")
+                                }
+                                .buttonStyle(BorderlessButtonStyle())
+                            }
+                            if isEditingWhereFrom {
+                                TextField("Enter source", text: $whereFrom)
+                                    .textFieldStyle(RoundedBorderTextFieldStyle())
+                                    .onSubmit {
+                                        saveMetadata()
+                                    }
+                                    .onChange(of: whereFrom) { _, _ in
+                                        saveMetadata()
+                                    }
+                            } else {
+                                if whereFrom.isEmpty {
+                                    Text("No source specified")
+                                        .foregroundColor(.secondary)
+                                        .italic()
+                                } else {
+                                    Text(whereFrom)
+                                        .textSelection(.enabled)
+                                }
+                            }
+                        }
+                        
+                        // File Info Section
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("File Info")
+                                .font(.headline)
+                            
+                            VStack(alignment: .leading, spacing: 4) {
+                                InfoRow(label: "Name", value: file.name)
+                                InfoRow(label: "Path", value: file.url.path)
+                                InfoRow(label: "Type", value: file.url.pathExtension.uppercased())
+                                
+                                if let fileSize = getFileSize() {
+                                    InfoRow(label: "Size", value: fileSize)
+                                }
+                                
+                                if let creationDate = getCreationDate() {
+                                    InfoRow(label: "Created", value: creationDate)
+                                }
+                                
+                                if let modificationDate = getModificationDate() {
+                                    InfoRow(label: "Modified", value: modificationDate)
+                                }
+                            }
+                        }
+                    }
+                    .padding()
+                }
+                .frame(width: 300)
+                .background(Color(NSColor.controlBackgroundColor))
+            }
+        }
+        .onAppear {
+            loadMetadata()
+            escapeMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+                if event.keyCode == 53 { // Escape
+                    onBack()
+                    return nil // Don't propagate
+                }
+                return event
+            }
+        }
+        .onDisappear {
+            if let monitor = escapeMonitor {
+                NSEvent.removeMonitor(monitor)
+                escapeMonitor = nil
+            }
+            saveMetadata()
+        }
+    }
+    
+    private func loadMetadata() {
+        // Load saved metadata from file system attributes
+        do {
+            print("🔍 Attempting to load metadata for: \(file.name)")
+            print("📁 File path: \(file.url.path)")
+            
+            var loadedFromFileSystem = false
+            
+            // Try to load from extended attributes first
+            if let tagsData = try? file.url.extendedAttribute(forName: "com.microfiche.tags"),
+               let tagsString = String(data: tagsData, encoding: .utf8) {
+                tags = tagsString.components(separatedBy: ",").filter { !$0.isEmpty }
+                print("✅ Loaded tags: \(tags)")
+                loadedFromFileSystem = true
+            } else {
+                print("ℹ️ No tags found or error loading tags")
+            }
+            
+            if let labelsData = try? file.url.extendedAttribute(forName: "com.microfiche.labels"),
+               let labelsString = String(data: labelsData, encoding: .utf8) {
+                labels = labelsString.components(separatedBy: ",").filter { !$0.isEmpty }
+                print("✅ Loaded labels: \(labels)")
+                loadedFromFileSystem = true
+            } else {
+                print("ℹ️ No labels found or error loading labels")
+            }
+            
+            if let commentsData = try? file.url.extendedAttribute(forName: "com.microfiche.comments"),
+               let commentsString = String(data: commentsData, encoding: .utf8) {
+                comments = commentsString
+                print("✅ Loaded comments: \(comments)")
+                loadedFromFileSystem = true
+            } else {
+                print("ℹ️ No comments found or error loading comments")
+            }
+            
+            if let whereFromData = try? file.url.extendedAttribute(forName: "com.microfiche.whereFrom"),
+               let whereFromString = String(data: whereFromData, encoding: .utf8) {
+                whereFrom = whereFromString
+                print("✅ Loaded whereFrom: \(whereFrom)")
+                loadedFromFileSystem = true
+            } else {
+                print("ℹ️ No whereFrom found or error loading whereFrom")
+            }
+            
+            if loadedFromFileSystem {
+                print("✅ Metadata loaded from file system for \(file.name)")
+            } else {
+                print("🔄 No file system metadata found, trying UserDefaults")
+                loadFromUserDefaults()
+            }
+            
+        } catch {
+            print("❌ Error loading metadata from file system for \(file.name): \(error)")
+            print("🔄 Falling back to UserDefaults")
+            loadFromUserDefaults()
+        }
+    }
+    
+    private func saveMetadata() {
+        do {
+            print("💾 Attempting to save metadata for: \(file.name)")
+            print("📁 File path: \(file.url.path)")
+            
+            // Check if file is writable
+            guard FileManager.default.isWritableFile(atPath: file.url.path) else {
+                print("❌ File is not writable: \(file.url.path)")
+                saveToUserDefaults() // Fallback to UserDefaults
+                return
+            }
+            
+            // Save Finder comment
+            print("💬 Saving Finder comment: \(comments)")
+            try file.url.setFinderComment(comments)
+            
+            // Save Finder tags and labels
+            print("🏷️ Saving Finder tags: \(tags), labels: \(labels)")
+            try file.url.setFinderTagsAndLabels(tags: tags, labels: labels)
+            
+            print("✅ Finder metadata saved for \(file.name)")
+            
+            // Verify the save by listing extended attributes
+            do {
+                let attributes = try file.url.listExtendedAttributes()
+                print("🔍 Extended attributes on file: \(attributes)")
+            } catch {
+                print("⚠️ Could not verify extended attributes: \(error)")
+            }
+            
+        } catch {
+            print("❌ Error saving Finder metadata for \(file.name): \(error)")
+            print("❌ Error details: \(error.localizedDescription)")
+            
+            // Try to get more specific error information
+            if let posixError = error as? POSIXError {
+                print("❌ POSIX Error code: \(posixError.code.rawValue)")
+                print("❌ POSIX Error description: \(posixError.localizedDescription)")
+            }
+            
+            // Fallback to UserDefaults
+            print("🔄 Falling back to UserDefaults storage")
+            saveToUserDefaults()
+        }
+    }
+    
+    private func saveToUserDefaults() {
+        let metadata = [
+            "tags": tags,
+            "labels": labels,
+            "comments": comments,
+            "whereFrom": whereFrom
+        ] as [String : Any]
+        
+        let key = "metadata_\(file.id.uuidString)"
+        UserDefaults.standard.set(metadata, forKey: key)
+        UserDefaults.standard.synchronize()
+        print("✅ Metadata saved to UserDefaults for \(file.name)")
+    }
+    
+    private func loadFromUserDefaults() {
+        let key = "metadata_\(file.id.uuidString)"
+        if let metadata = UserDefaults.standard.dictionary(forKey: key) {
+            tags = metadata["tags"] as? [String] ?? []
+            labels = metadata["labels"] as? [String] ?? []
+            comments = metadata["comments"] as? String ?? ""
+            whereFrom = metadata["whereFrom"] as? String ?? ""
+            print("✅ Metadata loaded from UserDefaults for \(file.name)")
+        }
+    }
+    
+    private func getFileSize() -> String? {
+        do {
+            let attributes = try FileManager.default.attributesOfItem(atPath: file.url.path)
+            if let size = attributes[.size] as? Int64 {
+                return ByteCountFormatter.string(fromByteCount: size, countStyle: .file)
+            }
+        } catch {
+            print("Error getting file size: \(error)")
+        }
+        return nil
+    }
+    
+    private func getCreationDate() -> String? {
+        do {
+            let attributes = try FileManager.default.attributesOfItem(atPath: file.url.path)
+            if let date = attributes[.creationDate] as? Date {
+                let formatter = DateFormatter()
+                formatter.dateStyle = .medium
+                formatter.timeStyle = .short
+                return formatter.string(from: date)
+            }
+        } catch {
+            print("Error getting creation date: \(error)")
+        }
+        return nil
+    }
+    
+    private func getModificationDate() -> String? {
+        do {
+            let attributes = try FileManager.default.attributesOfItem(atPath: file.url.path)
+            if let date = attributes[.modificationDate] as? Date {
+                let formatter = DateFormatter()
+                formatter.dateStyle = .medium
+                formatter.timeStyle = .short
+                return formatter.string(from: date)
+            }
+        } catch {
+            print("Error getting modification date: \(error)")
+        }
+        return nil
+    }
+}
+
+struct InfoRow: View {
+    let label: String
+    let value: String
+    
+    var body: some View {
+        HStack(alignment: .top) {
+            Text(label)
+                .font(.caption)
+                .foregroundColor(.secondary)
+                .frame(width: 60, alignment: .leading)
+            Text(value)
+                .font(.caption)
+                .textSelection(.enabled)
+            Spacer()
+        }
+    }
+}
+
+// MARK: - URL Extensions for Extended Attributes
+extension URL {
+    func extendedAttribute(forName name: String) throws -> Data {
+        let data = try withUnsafeFileSystemRepresentation { fileSystemPath in
+            var size = getxattr(fileSystemPath, name, nil, 0, 0, 0)
+            guard size >= 0 else {
+                throw POSIXError(.init(rawValue: errno)!)
+            }
+            
+            var data = Data(count: size)
+            let result = data.withUnsafeMutableBytes { buffer in
+                getxattr(fileSystemPath, name, buffer.baseAddress, size, 0, 0)
+            }
+            
+            guard result >= 0 else {
+                throw POSIXError(.init(rawValue: errno)!)
+            }
+            
+            return data
+        }
+        return data
+    }
+    
+    func setExtendedAttribute(_ data: Data, forName name: String) throws {
+        try withUnsafeFileSystemRepresentation { fileSystemPath in
+            let result = data.withUnsafeBytes { buffer in
+                setxattr(fileSystemPath, name, buffer.baseAddress, data.count, 0, 0)
+            }
+            
+            guard result >= 0 else {
+                throw POSIXError(.init(rawValue: errno)!)
+            }
+        }
+    }
+    
+    func removeExtendedAttribute(forName name: String) throws {
+        try withUnsafeFileSystemRepresentation { fileSystemPath in
+            let result = removexattr(fileSystemPath, name, 0)
+            guard result >= 0 else {
+                throw POSIXError(.init(rawValue: errno)!)
+            }
+        }
+    }
+    
+    func listExtendedAttributes() throws -> [String] {
+        try withUnsafeFileSystemRepresentation { fileSystemPath in
+            var size = listxattr(fileSystemPath, nil, 0, 0)
+            guard size >= 0 else {
+                throw POSIXError(.init(rawValue: errno)!)
+            }
+            
+            var buffer = [CChar](repeating: 0, count: size)
+            let result = listxattr(fileSystemPath, &buffer, size, 0)
+            
+            guard result >= 0 else {
+                throw POSIXError(.init(rawValue: errno)!)
+            }
+            
+            let attributesString = String(cString: buffer)
+            return attributesString.components(separatedBy: "\0").filter { !$0.isEmpty }
+        }
+    }
+}
+
+// MARK: - Finder Metadata Extensions
+extension URL {
+    func setFinderComment(_ comment: String) throws {
+        let key = "com.apple.metadata:kMDItemFinderComment"
+        let plist = try PropertyListSerialization.data(fromPropertyList: comment, format: .binary, options: 0)
+        try self.setExtendedAttribute(plist, forName: key)
+    }
+    
+    func setFinderTagsAndLabels(tags: [String], labels: [String]) throws {
+        let key = "com.apple.metadata:_kMDItemUserTags"
+        // Finder color tags are just special strings (e.g., 'Red', 'Orange', etc.)
+        // We'll append them to the tags array
+        let allTags = tags + labels
+        let plist = try PropertyListSerialization.data(fromPropertyList: allTags, format: .binary, options: 0)
+        try self.setExtendedAttribute(plist, forName: key)
+    }
+}
+
 struct ContentView: View {
     @State private var folderURLs: [URL] = []
     @State private var selection: Selection?
@@ -222,6 +831,7 @@ struct ContentView: View {
     @State private var scrollToID: UUID?
     @State private var gridColumnCount: Int = 1
     @State private var showCacheMenu: Bool = false
+    @State private var detailViewFile: ImageFile?
     
     let supportedExtensions = ["jpg", "jpeg", "png", "pdf", "svg", "gif", "tiff"]
     
@@ -249,110 +859,124 @@ struct ContentView: View {
     
     var body: some View {
         ZStack {
-            NavigationSplitView {
-                SidebarView(
-                    folderURLs: folderURLs,
-                    selection: selection,
-                    onLinkFolder: linkFolder,
-                    onSelect: { newSelection in
-                        selection = newSelection
+            if let detailFile = detailViewFile {
+                ImageDetailView(file: detailFile) {
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                        detailViewFile = nil
+                    }
+                }
+                .transition(.asymmetric(
+                    insertion: .move(edge: .trailing).combined(with: .opacity),
+                    removal: .move(edge: .trailing).combined(with: .opacity)
+                ))
+            } else {
+                NavigationSplitView {
+                    SidebarView(
+                        folderURLs: folderURLs,
+                        selection: selection,
+                        onLinkFolder: linkFolder,
+                        onSelect: { newSelection in
+                            selection = newSelection
+                        },
+                        onRemoveFolder: removeFolder
+                    )
+                } detail: {
+                    MainContentView(
+                        imageFiles: imageFiles,
+                        viewMode: $viewMode,
+                        gridThumbnailSize: $gridThumbnailSize,
+                        gridColumnCount: $gridColumnCount,
+                        selectedImageFileIDs: $selectedImageFileIDs,
+                        onSelectImage: handleImageSelection,
+                        onDoubleClickImage: handleDoubleClickImage,
+                        scrollToID: $scrollToID,
+                        onRename: renameFile
+                    )
+                }
+                .navigationTitle("")
+                .onAppear {
+                    // Optionally, load persisted folders here
+                }
+                .onChange(of: selection) { oldValue, newValue in
+                    switch newValue {
+                    case .all:
+                        loadImages(from: folderURLs)
+                    case .folder(let url):
+                        loadImages(from: [url])
+                    case .none:
+                        imageFiles = []
+                    }
+                    selectedImageFileIDs = []
+                    lastSelectedImageFileID = nil
+                }
+                .onChange(of: showDeleteAlert) { _, isShowing in
+                    if !isShowing {
+                        pendingDeleteFiles = []
+                    }
+                }
+                .background(KeyboardEventHandlingView(
+                    onDeletePressed: {
+                        let filesToDelete = imageFiles.filter { selectedImageFileIDs.contains($0.id) }
+                        if !filesToDelete.isEmpty {
+                            if dontAskAgain {
+                                moveFilesToTrash(filesToDelete)
+                            } else {
+                                pendingDeleteFiles = filesToDelete
+                                showDeleteAlert = true
+                            }
+                        }
                     },
-                    onRemoveFolder: removeFolder
-                )
-            } detail: {
-                MainContentView(
-                    imageFiles: imageFiles,
-                    viewMode: $viewMode,
-                    gridThumbnailSize: $gridThumbnailSize,
-                    gridColumnCount: $gridColumnCount,
-                    selectedImageFileIDs: $selectedImageFileIDs,
-                    onSelectImage: handleImageSelection,
-                    scrollToID: $scrollToID,
-                    onRename: renameFile
-                )
-            }
-            .navigationTitle("")
-            .onAppear {
-                // Optionally, load persisted folders here
-            }
-            .onChange(of: selection) { oldValue, newValue in
-                switch newValue {
-                case .all:
-                    loadImages(from: folderURLs)
-                case .folder(let url):
-                    loadImages(from: [url])
-                case .none:
-                    imageFiles = []
-                }
-                selectedImageFileIDs = []
-                lastSelectedImageFileID = nil
-            }
-            .onChange(of: showDeleteAlert) { _, isShowing in
-                if !isShowing {
-                    pendingDeleteFiles = []
-                }
-            }
-            .background(KeyboardEventHandlingView(
-                onDeletePressed: {
-                    let filesToDelete = imageFiles.filter { selectedImageFileIDs.contains($0.id) }
-                    if !filesToDelete.isEmpty {
+                    onEscapePressed: {
+                        if previewedImageFile != nil {
+                            previewedImageFile = nil
+                        } else if !selectedImageFileIDs.isEmpty {
+                            selectedImageFileIDs = []
+                            lastSelectedImageFileID = nil
+                        }
+                    },
+                    onSpacebarPressed: {
+                        if previewedImageFile != nil {
+                            previewedImageFile = nil
+                            return
+                        }
+                        
+                        guard !selectedImageFileIDs.isEmpty else { return }
+
+                        let idToPreview = selectedImageFileIDs.count == 1 ? selectedImageFileIDs.first : lastSelectedImageFileID
+                        
+                        if let id = idToPreview, let file = imageFiles.first(where: { $0.id == id }) {
+                            previewedImageFile = file
+                        }
+                    },
+                    onArrowPressed: handleArrowKey
+                ))
+                .alert("Move to Trash?", isPresented: $showDeleteAlert) {
+                    Button("Move to Trash", role: .destructive) {
+                        moveFilesToTrash(pendingDeleteFiles)
                         if dontAskAgain {
-                            moveFilesToTrash(filesToDelete)
-                        } else {
-                            pendingDeleteFiles = filesToDelete
-                            showDeleteAlert = true
+                            UserDefaults.standard.set(true, forKey: "dontAskDeleteConfirm")
                         }
                     }
-                },
-                onEscapePressed: {
-                    if previewedImageFile != nil {
-                        previewedImageFile = nil
-                    } else if !selectedImageFileIDs.isEmpty {
-                        selectedImageFileIDs = []
-                        lastSelectedImageFileID = nil
-                    }
-                },
-                onSpacebarPressed: {
-                    if previewedImageFile != nil {
-                        previewedImageFile = nil
-                        return
-                    }
-                    
-                    guard !selectedImageFileIDs.isEmpty else { return }
+                    .keyboardShortcut(.defaultAction)
 
-                    let idToPreview = selectedImageFileIDs.count == 1 ? selectedImageFileIDs.first : lastSelectedImageFileID
-                    
-                    if let id = idToPreview, let file = imageFiles.first(where: { $0.id == id }) {
-                        previewedImageFile = file
-                    }
-                },
-                onArrowPressed: handleArrowKey
-            ))
-            .alert("Move to Trash?", isPresented: $showDeleteAlert) {
-                Button("Move to Trash", role: .destructive) {
-                    moveFilesToTrash(pendingDeleteFiles)
-                    if dontAskAgain {
-                        UserDefaults.standard.set(true, forKey: "dontAskDeleteConfirm")
-                    }
+                    Button("Cancel", role: .cancel) { }
+                } message: {
+                    let fileCount = pendingDeleteFiles.count
+                    let messageText = fileCount == 1 ?
+                        "Are you sure you want to move \(pendingDeleteFiles.first?.name ?? "this file") to the Trash?" :
+                        "Are you sure you want to move \(fileCount) items to the Trash?"
+                    Text(messageText)
                 }
-                .keyboardShortcut(.defaultAction)
-
-                Button("Cancel", role: .cancel) { }
-            } message: {
-                let fileCount = pendingDeleteFiles.count
-                let messageText = fileCount == 1 ?
-                    "Are you sure you want to move \(pendingDeleteFiles.first?.name ?? "this file") to the Trash?" :
-                    "Are you sure you want to move \(fileCount) items to the Trash?"
-                Text(messageText)
-            }
-            
-            if let file = previewedImageFile {
-                PreviewView(file: file) {
-                    previewedImageFile = nil
+                
+                if let file = previewedImageFile {
+                    PreviewView(file: file) {
+                        previewedImageFile = nil
+                    }
+                    .transition(.opacity)
                 }
-                .transition(.opacity)
             }
         }
+        .animation(.easeInOut(duration: 0.3), value: detailViewFile)
         .animation(.easeInOut(duration: 0.2), value: previewedImageFile)
     }
 
@@ -421,6 +1045,14 @@ struct ContentView: View {
             selectedImageFileIDs = [fileID]
         }
         lastSelectedImageFileID = fileID
+    }
+    
+    private func handleDoubleClickImage(for fileID: UUID) {
+        if let file = imageFiles.first(where: { $0.id == fileID }) {
+            withAnimation(.easeInOut(duration: 0.3)) {
+                detailViewFile = file
+            }
+        }
     }
     
     private func moveFilesToTrash(_ files: [ImageFile]) {
@@ -670,6 +1302,7 @@ struct ContentView: View {
         @Binding var gridColumnCount: Int
         @Binding var selectedImageFileIDs: Set<UUID>
         let onSelectImage: (UUID) -> Void
+        let onDoubleClickImage: (UUID) -> Void
         @Binding var scrollToID: UUID?
         let onRename: (URL, String) -> Void
         var body: some View {
@@ -685,9 +1318,25 @@ struct ContentView: View {
                     Spacer()
                 } else {
                     if viewMode == .grid {
-                        ImageGridView(imageFiles: imageFiles, selectedImageFileIDs: $selectedImageFileIDs, onSelectImage: onSelectImage, thumbnailSize: gridThumbnailSize, scrollToID: $scrollToID, columnCount: $gridColumnCount, onRename: onRename)
+                        ImageGridView(
+                            imageFiles: imageFiles, 
+                            selectedImageFileIDs: $selectedImageFileIDs, 
+                            onSelectImage: onSelectImage,
+                            onDoubleClickImage: onDoubleClickImage,
+                            thumbnailSize: gridThumbnailSize, 
+                            scrollToID: $scrollToID, 
+                            columnCount: $gridColumnCount, 
+                            onRename: onRename
+                        )
                     } else {
-                        ImageListView(imageFiles: imageFiles, selectedImageFileIDs: $selectedImageFileIDs, onSelectImage: onSelectImage, scrollToID: $scrollToID, onRename: onRename)
+                        ImageListView(
+                            imageFiles: imageFiles, 
+                            selectedImageFileIDs: $selectedImageFileIDs, 
+                            onSelectImage: onSelectImage,
+                            onDoubleClickImage: onDoubleClickImage,
+                            scrollToID: $scrollToID, 
+                            onRename: onRename
+                        )
                     }
                 }
             }
@@ -722,6 +1371,7 @@ struct ContentView: View {
         let imageFiles: [ImageFile]
         @Binding var selectedImageFileIDs: Set<UUID>
         let onSelectImage: (UUID) -> Void
+        let onDoubleClickImage: (UUID) -> Void
         let thumbnailSize: GridThumbnailSize
         @Binding var scrollToID: UUID?
         @Binding var columnCount: Int
@@ -754,10 +1404,19 @@ struct ContentView: View {
                                         )
                                         .shadow(color: selectedImageFileIDs.contains(file.id) ? Color.accentColor.opacity(0.4) : .clear, radius: selectedImageFileIDs.contains(file.id) ? 10 : 0)
                                 )
+                                .simultaneousGesture(
+                                    TapGesture(count: 1)
+                                        .onEnded { _ in
+                                            onSelectImage(file.id)
+                                        }
+                                )
+                                .simultaneousGesture(
+                                    TapGesture(count: 2)
+                                        .onEnded { _ in
+                                            onDoubleClickImage(file.id)
+                                        }
+                                )
                                 .id(file.id)
-                                .onTapGesture {
-                                    onSelectImage(file.id)
-                                }
                                 .onAppear {
                                     prefetchNearbyImages(for: file)
                                 }
@@ -821,6 +1480,7 @@ struct ContentView: View {
         let imageFiles: [ImageFile]
         @Binding var selectedImageFileIDs: Set<UUID>
         let onSelectImage: (UUID) -> Void
+        let onDoubleClickImage: (UUID) -> Void
         @Binding var scrollToID: UUID?
         let onRename: (URL, String) -> Void
 
@@ -846,10 +1506,19 @@ struct ContentView: View {
                         }
                         .padding(.vertical, 2)
                         .contentShape(Rectangle())
-                        .onTapGesture {
-                            onSelectImage(file.id)
-                        }
                         .background(selectedImageFileIDs.contains(file.id) ? Color.accentColor.opacity(0.2) : Color.clear)
+                        .simultaneousGesture(
+                            TapGesture(count: 1)
+                                .onEnded { _ in
+                                    onSelectImage(file.id)
+                                }
+                        )
+                        .simultaneousGesture(
+                            TapGesture(count: 2)
+                                .onEnded { _ in
+                                    onDoubleClickImage(file.id)
+                                }
+                        )
                         .id(file.id)
                         .onAppear {
                             // Prefetch nearby images in list view
