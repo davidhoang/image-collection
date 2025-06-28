@@ -711,32 +711,46 @@ struct ContentView: View {
         var body: some View {
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVGrid(columns: Array(repeating: .init(.flexible(), spacing: 20), count: columnCount), spacing: 20) {
-                        ForEach(imageFiles) { file in
-                            VStack {
-                                FileThumbnailView(file: file, size: thumbnailSizeValue, onRename: onRename)
-                                    .frame(width: thumbnailSizeValue, height: thumbnailSizeValue)
-                                    .background(Color.gray.opacity(0.1))
-                                    .cornerRadius(8)
-                                    .onTapGesture {
-                                        onSelectImage(file.id)
-                                    }
-                                EditableFileNameView(file: file, onRename: onRename)
-                                    .font(.caption)
-                                    .lineLimit(2)
-                                    .multilineTextAlignment(.center)
-                            }
-                            .padding(4)
-                            .background(selectedImageFileIDs.contains(file.id) ? Color.accentColor.opacity(0.2) : Color.clear)
-                            .cornerRadius(8)
-                            .id(file.id)
-                            .onAppear {
-                                // Prefetch next few images
-                                prefetchNearbyImages(for: file)
+                    ZStack {
+                        // Adaptive microfiche sheet background
+                        Color(nsColor: NSColor.windowBackgroundColor)
+                            .opacity(0.7)
+                            .edgesIgnoringSafeArea(.all)
+                        LazyVGrid(columns: Array(repeating: .init(.flexible(), spacing: 20), count: columnCount), spacing: 20) {
+                            ForEach(imageFiles) { file in
+                                VStack {
+                                    FileThumbnailView(file: file, size: thumbnailSizeValue, onRename: onRename)
+                                        .frame(width: thumbnailSizeValue, height: thumbnailSizeValue)
+                                    EditableFileNameView(file: file, onRename: onRename)
+                                        .font(.caption)
+                                        .lineLimit(2)
+                                        .multilineTextAlignment(.center)
+                                }
+                                .padding(6)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 10)
+                                        .fill(Color(red: 0.13, green: 0.14, blue: 0.16))
+                                )
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 10)
+                                        .stroke(
+                                            selectedImageFileIDs.contains(file.id) ? Color.accentColor : Color(red: 0.07, green: 0.08, blue: 0.09),
+                                            lineWidth: selectedImageFileIDs.contains(file.id) ? 4 : 3
+                                        )
+                                        .shadow(color: selectedImageFileIDs.contains(file.id) ? Color.accentColor.opacity(0.4) : .clear, radius: selectedImageFileIDs.contains(file.id) ? 10 : 0)
+                                )
+                                .id(file.id)
+                                .onTapGesture {
+                                    onSelectImage(file.id)
+                                }
+                                .onAppear {
+                                    prefetchNearbyImages(for: file)
+                                }
                             }
                         }
+                        .padding(.horizontal, 32)
+                        .padding(.vertical, 56)
                     }
-                    .padding()
                 }
                 .onChange(of: scrollToID) { _, newID in
                     if let id = newID {
@@ -925,15 +939,28 @@ struct FileThumbnailView: View {
     let onRename: (URL, String) -> Void
 
     var body: some View {
-        if file.url.pathExtension.lowercased() == "pdf" {
-            PDFThumbnailView(url: file.url, size: size)
-        } else if file.url.pathExtension.lowercased() == "svg" {
-            SVGThumbnailView(url: file.url)
-        } else {
-            OptimizedAsyncImage(url: file.url, size: size)
-                .frame(width: size, height: size)
-                .clipped()
+        ZStack {
+            // Consistent cell background
+            Color(red: 0.13, green: 0.14, blue: 0.16)
+            Group {
+                if file.url.pathExtension.lowercased() == "pdf" {
+                    PDFThumbnailView(url: file.url, size: size)
+                        .aspectRatio(contentMode: .fill)
+                        .clipped()
+                } else if file.url.pathExtension.lowercased() == "svg" {
+                    SVGThumbnailView(url: file.url)
+                        .aspectRatio(contentMode: .fill)
+                        .clipped()
+                } else {
+                    OptimizedAsyncImage(url: file.url, size: size)
+                        .aspectRatio(contentMode: .fill)
+                        .clipped()
+                }
+            }
+            .frame(width: size, height: size)
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
+        .frame(width: size, height: size)
     }
 }
 
