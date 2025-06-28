@@ -165,18 +165,31 @@ struct OptimizedAsyncImage: View {
     
     private func loadAndResizeImage() -> NSImage? {
         guard let sourceImage = NSImage(contentsOf: url) else { return nil }
-        
-        // Create thumbnail at the requested size
         let targetSize = NSSize(width: size, height: size)
         let thumbnail = NSImage(size: targetSize)
-        
+
+        // Calculate aspect-fit rect
+        let imageAspect = sourceImage.size.width / sourceImage.size.height
+        let targetAspect = targetSize.width / targetSize.height
+        var drawRect = NSRect(origin: .zero, size: targetSize)
+        if imageAspect > targetAspect {
+            // Image is wider than target: pillarbox
+            let scaledHeight = targetSize.width / imageAspect
+            drawRect.origin.y = (targetSize.height - scaledHeight) / 2
+            drawRect.size = NSSize(width: targetSize.width, height: scaledHeight)
+        } else {
+            // Image is taller than target: letterbox
+            let scaledWidth = targetSize.height * imageAspect
+            drawRect.origin.x = (targetSize.width - scaledWidth) / 2
+            drawRect.size = NSSize(width: scaledWidth, height: targetSize.height)
+        }
+
         thumbnail.lockFocus()
-        sourceImage.draw(in: NSRect(origin: .zero, size: targetSize),
-                        from: NSRect(origin: .zero, size: sourceImage.size),
-                        operation: .copy,
-                        fraction: 1.0)
+        sourceImage.draw(in: drawRect,
+                         from: NSRect(origin: .zero, size: sourceImage.size),
+                         operation: .copy,
+                         fraction: 1.0)
         thumbnail.unlockFocus()
-        
         return thumbnail
     }
 }
@@ -945,16 +958,13 @@ struct FileThumbnailView: View {
             Group {
                 if file.url.pathExtension.lowercased() == "pdf" {
                     PDFThumbnailView(url: file.url, size: size)
-                        .aspectRatio(contentMode: .fill)
-                        .clipped()
+                        .aspectRatio(contentMode: .fit)
                 } else if file.url.pathExtension.lowercased() == "svg" {
                     SVGThumbnailView(url: file.url)
-                        .aspectRatio(contentMode: .fill)
-                        .clipped()
+                        .aspectRatio(contentMode: .fit)
                 } else {
                     OptimizedAsyncImage(url: file.url, size: size)
-                        .aspectRatio(contentMode: .fill)
-                        .clipped()
+                        .aspectRatio(contentMode: .fit)
                 }
             }
             .frame(width: size, height: size)
