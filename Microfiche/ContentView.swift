@@ -363,13 +363,19 @@ struct ContentView: View {
         openPanel.allowsMultipleSelection = true
         
         if openPanel.runModal() == .OK {
+            var added = false
             for url in openPanel.urls {
                 if !folderURLs.contains(url) {
                     folderURLs.append(url)
+                    added = true
                 }
             }
             if selection == nil, let firstURL = openPanel.urls.first {
                 selection = .folder(firstURL)
+            }
+            // Always refresh 'All' after adding folders
+            if added {
+                loadImages(from: folderURLs)
             }
         }
     }
@@ -734,10 +740,6 @@ struct ContentView: View {
                                 VStack {
                                     FileThumbnailView(file: file, size: thumbnailSizeValue, onRename: onRename)
                                         .frame(width: thumbnailSizeValue, height: thumbnailSizeValue)
-                                    EditableFileNameView(file: file, onRename: onRename)
-                                        .font(.caption)
-                                        .lineLimit(2)
-                                        .multilineTextAlignment(.center)
                                 }
                                 .padding(6)
                                 .background(
@@ -782,6 +784,7 @@ struct ContentView: View {
                     updateColumnCount(for: thumbnailSize)
                 }
             }
+            .animation(.spring(), value: thumbnailSize)
         }
         
         private func prefetchNearbyImages(for file: ImageFile) {
@@ -802,7 +805,7 @@ struct ContentView: View {
         }
         
         private func updateColumnCount(for size: GridThumbnailSize) {
-            columnCount = size == .large ? 3 : (size == .medium ? 5 : 8)
+            columnCount = size == .large ? 4 : (size == .medium ? 5 : 8)
         }
         
         private var thumbnailSizeValue: CGFloat {
@@ -892,25 +895,41 @@ struct PreviewView: View {
     let onDismiss: () -> Void
 
     var body: some View {
-        ZStack {
-            Color.black.opacity(0.8)
-                .edgesIgnoringSafeArea(.all)
-                .onTapGesture(perform: onDismiss)
-            
-            if file.url.pathExtension.lowercased() == "pdf" {
-                PDFKitView(url: file.url)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if file.url.pathExtension.lowercased() == "svg" {
-                SVGImageView(url: file.url)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .aspectRatio(contentMode: .fit)
-            } else {
-                AsyncImage(url: file.url) { image in
-                    image.resizable()
-                         .aspectRatio(contentMode: .fit)
-                } placeholder: {
-                    ProgressView()
+        GeometryReader { geometry in
+            ZStack {
+                Color.black.opacity(0.8)
+                    .edgesIgnoringSafeArea(.all)
+                    .onTapGesture(perform: onDismiss)
+
+                // Centered preview container
+                VStack {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 16)
+                            .fill(Color(NSColor.controlBackgroundColor))
+                        RoundedRectangle(cornerRadius: 16)
+                            .stroke(Color(NSColor.separatorColor), lineWidth: 4)
+                        Group {
+                            if file.url.pathExtension.lowercased() == "pdf" {
+                                PDFKitView(url: file.url)
+                                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            } else if file.url.pathExtension.lowercased() == "svg" {
+                                SVGImageView(url: file.url)
+                                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                    .aspectRatio(contentMode: .fit)
+                            } else {
+                                AsyncImage(url: file.url) { image in
+                                    image.resizable()
+                                         .aspectRatio(contentMode: .fit)
+                                } placeholder: {
+                                    ProgressView()
+                                }
+                            }
+                        }
+                        .padding(32)
+                    }
+                    .frame(width: geometry.size.width * 0.75, height: geometry.size.height * 0.75)
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
     }
