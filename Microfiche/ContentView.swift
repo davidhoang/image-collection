@@ -165,18 +165,31 @@ struct OptimizedAsyncImage: View {
     
     private func loadAndResizeImage() -> NSImage? {
         guard let sourceImage = NSImage(contentsOf: url) else { return nil }
-        
-        // Create thumbnail at the requested size
         let targetSize = NSSize(width: size, height: size)
         let thumbnail = NSImage(size: targetSize)
-        
+
+        // Calculate aspect-fit rect
+        let imageAspect = sourceImage.size.width / sourceImage.size.height
+        let targetAspect = targetSize.width / targetSize.height
+        var drawRect = NSRect(origin: .zero, size: targetSize)
+        if imageAspect > targetAspect {
+            // Image is wider than target: pillarbox
+            let scaledHeight = targetSize.width / imageAspect
+            drawRect.origin.y = (targetSize.height - scaledHeight) / 2
+            drawRect.size = NSSize(width: targetSize.width, height: scaledHeight)
+        } else {
+            // Image is taller than target: letterbox
+            let scaledWidth = targetSize.height * imageAspect
+            drawRect.origin.x = (targetSize.width - scaledWidth) / 2
+            drawRect.size = NSSize(width: scaledWidth, height: targetSize.height)
+        }
+
         thumbnail.lockFocus()
-        sourceImage.draw(in: NSRect(origin: .zero, size: targetSize),
-                        from: NSRect(origin: .zero, size: sourceImage.size),
-                        operation: .copy,
-                        fraction: 1.0)
+        sourceImage.draw(in: drawRect,
+                         from: NSRect(origin: .zero, size: sourceImage.size),
+                         operation: .copy,
+                         fraction: 1.0)
         thumbnail.unlockFocus()
-        
         return thumbnail
     }
 }
@@ -350,13 +363,19 @@ struct ContentView: View {
         openPanel.allowsMultipleSelection = true
         
         if openPanel.runModal() == .OK {
+            var added = false
             for url in openPanel.urls {
                 if !folderURLs.contains(url) {
                     folderURLs.append(url)
+                    added = true
                 }
             }
             if selection == nil, let firstURL = openPanel.urls.first {
                 selection = .folder(firstURL)
+            }
+            // Always refresh 'All' after adding folders
+            if added {
+                loadImages(from: folderURLs)
             }
         }
     }
@@ -711,32 +730,42 @@ struct ContentView: View {
         var body: some View {
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVGrid(columns: Array(repeating: .init(.flexible(), spacing: 20), count: columnCount), spacing: 20) {
-                        ForEach(imageFiles) { file in
-                            VStack {
-                                FileThumbnailView(file: file, size: thumbnailSizeValue, onRename: onRename)
-                                    .frame(width: thumbnailSizeValue, height: thumbnailSizeValue)
-                                    .background(Color.gray.opacity(0.1))
-                                    .cornerRadius(8)
-                                    .onTapGesture {
-                                        onSelectImage(file.id)
-                                    }
-                                EditableFileNameView(file: file, onRename: onRename)
-                                    .font(.caption)
-                                    .lineLimit(2)
-                                    .multilineTextAlignment(.center)
-                            }
-                            .padding(4)
-                            .background(selectedImageFileIDs.contains(file.id) ? Color.accentColor.opacity(0.2) : Color.clear)
-                            .cornerRadius(8)
-                            .id(file.id)
-                            .onAppear {
-                                // Prefetch next few images
-                                prefetchNearbyImages(for: file)
+                    ZStack {
+                        // Adaptive microfiche sheet background
+                        Color(nsColor: NSColor.windowBackgroundColor)
+                            .opacity(0.7)
+                            .edgesIgnoringSafeArea(.all)
+                        LazyVGrid(columns: Array(repeating: .init(.flexible(), spacing: 20), count: columnCount), spacing: 20) {
+                            ForEach(imageFiles) { file in
+                                VStack {
+                                    FileThumbnailView(file: file, size: thumbnailSizeValue, onRename: onRename)
+                                        .frame(width: thumbnailSizeValue, height: thumbnailSizeValue)
+                                }
+                                .padding(6)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 10)
+                                        .fill(Color(NSColor.controlBackgroundColor))
+                                )
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 10)
+                                        .stroke(
+                                            selectedImageFileIDs.contains(file.id) ? Color.accentColor : Color(NSColor.separatorColor),
+                                            lineWidth: selectedImageFileIDs.contains(file.id) ? 4 : 3
+                                        )
+                                        .shadow(color: selectedImageFileIDs.contains(file.id) ? Color.accentColor.opacity(0.4) : .clear, radius: selectedImageFileIDs.contains(file.id) ? 10 : 0)
+                                )
+                                .id(file.id)
+                                .onTapGesture {
+                                    onSelectImage(file.id)
+                                }
+                                .onAppear {
+                                    prefetchNearbyImages(for: file)
+                                }
                             }
                         }
+                        .padding(.horizontal, 32)
+                        .padding(.vertical, 56)
                     }
-                    .padding()
                 }
                 .onChange(of: scrollToID) { _, newID in
                     if let id = newID {
@@ -755,6 +784,7 @@ struct ContentView: View {
                     updateColumnCount(for: thumbnailSize)
                 }
             }
+            .animation(.spring(), value: thumbnailSize)
         }
         
         private func prefetchNearbyImages(for file: ImageFile) {
@@ -775,7 +805,7 @@ struct ContentView: View {
         }
         
         private func updateColumnCount(for size: GridThumbnailSize) {
-            columnCount = size == .large ? 3 : (size == .medium ? 5 : 8)
+            columnCount = size == .large ? 4 : (size == .medium ? 5 : 8)
         }
         
         private var thumbnailSizeValue: CGFloat {
@@ -865,25 +895,41 @@ struct PreviewView: View {
     let onDismiss: () -> Void
 
     var body: some View {
-        ZStack {
-            Color.black.opacity(0.8)
-                .edgesIgnoringSafeArea(.all)
-                .onTapGesture(perform: onDismiss)
-            
-            if file.url.pathExtension.lowercased() == "pdf" {
-                PDFKitView(url: file.url)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else if file.url.pathExtension.lowercased() == "svg" {
-                SVGImageView(url: file.url)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .aspectRatio(contentMode: .fit)
-            } else {
-                AsyncImage(url: file.url) { image in
-                    image.resizable()
-                         .aspectRatio(contentMode: .fit)
-                } placeholder: {
-                    ProgressView()
+        GeometryReader { geometry in
+            ZStack {
+                Color.black.opacity(0.8)
+                    .edgesIgnoringSafeArea(.all)
+                    .onTapGesture(perform: onDismiss)
+
+                // Centered preview container
+                VStack {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 16)
+                            .fill(Color(NSColor.controlBackgroundColor))
+                        RoundedRectangle(cornerRadius: 16)
+                            .stroke(Color(NSColor.separatorColor), lineWidth: 4)
+                        Group {
+                            if file.url.pathExtension.lowercased() == "pdf" {
+                                PDFKitView(url: file.url)
+                                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            } else if file.url.pathExtension.lowercased() == "svg" {
+                                SVGImageView(url: file.url)
+                                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                                    .aspectRatio(contentMode: .fit)
+                            } else {
+                                AsyncImage(url: file.url) { image in
+                                    image.resizable()
+                                         .aspectRatio(contentMode: .fit)
+                                } placeholder: {
+                                    ProgressView()
+                                }
+                            }
+                        }
+                        .padding(32)
+                    }
+                    .frame(width: geometry.size.width * 0.75, height: geometry.size.height * 0.75)
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
     }
@@ -925,15 +971,25 @@ struct FileThumbnailView: View {
     let onRename: (URL, String) -> Void
 
     var body: some View {
-        if file.url.pathExtension.lowercased() == "pdf" {
-            PDFThumbnailView(url: file.url, size: size)
-        } else if file.url.pathExtension.lowercased() == "svg" {
-            SVGThumbnailView(url: file.url)
-        } else {
-            OptimizedAsyncImage(url: file.url, size: size)
-                .frame(width: size, height: size)
-                .clipped()
+        ZStack {
+            // Consistent cell background
+            Color(NSColor.controlBackgroundColor)
+            Group {
+                if file.url.pathExtension.lowercased() == "pdf" {
+                    PDFThumbnailView(url: file.url, size: size)
+                        .aspectRatio(contentMode: .fit)
+                } else if file.url.pathExtension.lowercased() == "svg" {
+                    SVGThumbnailView(url: file.url)
+                        .aspectRatio(contentMode: .fit)
+                } else {
+                    OptimizedAsyncImage(url: file.url, size: size)
+                        .aspectRatio(contentMode: .fit)
+                }
+            }
+            .frame(width: size, height: size)
+            .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         }
+        .frame(width: size, height: size)
     }
 }
 
