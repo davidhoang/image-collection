@@ -742,12 +742,12 @@ struct ContentView: View {
                                 .padding(6)
                                 .background(
                                     RoundedRectangle(cornerRadius: 10)
-                                        .fill(Color(red: 0.13, green: 0.14, blue: 0.16))
+                                        .fill(Color(NSColor.controlBackgroundColor))
                                 )
                                 .overlay(
                                     RoundedRectangle(cornerRadius: 10)
                                         .stroke(
-                                            selectedImageFileIDs.contains(file.id) ? Color.accentColor : Color(red: 0.07, green: 0.08, blue: 0.09),
+                                            selectedImageFileIDs.contains(file.id) ? Color.accentColor : Color(NSColor.separatorColor),
                                             lineWidth: selectedImageFileIDs.contains(file.id) ? 4 : 3
                                         )
                                         .shadow(color: selectedImageFileIDs.contains(file.id) ? Color.accentColor.opacity(0.4) : .clear, radius: selectedImageFileIDs.contains(file.id) ? 10 : 0)
@@ -954,7 +954,7 @@ struct FileThumbnailView: View {
     var body: some View {
         ZStack {
             // Consistent cell background
-            Color(red: 0.13, green: 0.14, blue: 0.16)
+            Color(NSColor.controlBackgroundColor)
             Group {
                 if file.url.pathExtension.lowercased() == "pdf" {
                     PDFThumbnailView(url: file.url, size: size)
