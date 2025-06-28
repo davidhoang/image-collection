@@ -8,6 +8,179 @@ import SwiftUI
 import PDFKit
 import ImageIO
 
+// MARK: - Performance Monitoring
+class PerformanceMonitor: ObservableObject {
+    static let shared = PerformanceMonitor()
+    @Published var cacheHitRate: Double = 0.0
+    @Published var totalRequests: Int = 0
+    @Published var cacheHits: Int = 0
+    
+    private init() {}
+    
+    func recordCacheHit() {
+        totalRequests += 1
+        cacheHits += 1
+        updateHitRate()
+    }
+    
+    func recordCacheMiss() {
+        totalRequests += 1
+        updateHitRate()
+    }
+    
+    private func updateHitRate() {
+        if totalRequests > 0 {
+            cacheHitRate = Double(cacheHits) / Double(totalRequests)
+        }
+    }
+    
+    func reset() {
+        totalRequests = 0
+        cacheHits = 0
+        cacheHitRate = 0.0
+    }
+}
+
+// MARK: - Image Cache
+class ImageCache: ObservableObject {
+    static let shared = ImageCache()
+    private let cache = NSCache<NSString, NSImage>()
+    private let fileManager = FileManager.default
+    private let cacheDirectory: URL
+    
+    private init() {
+        // Create cache directory in app's cache folder
+        let appCache = fileManager.urls(for: .cachesDirectory, in: .userDomainMask).first!
+        cacheDirectory = appCache.appendingPathComponent("MicroficheThumbnails")
+        
+        // Set cache limits
+        cache.countLimit = 200 // Max 200 images in memory
+        cache.totalCostLimit = 50 * 1024 * 1024 // 50MB limit
+        
+        // Create cache directory if it doesn't exist
+        try? fileManager.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
+    }
+    
+    func getImage(for url: URL, size: CGFloat) -> NSImage? {
+        let key = cacheKey(for: url, size: size)
+        
+        // Check memory cache first
+        if let cachedImage = cache.object(forKey: key as NSString) {
+            PerformanceMonitor.shared.recordCacheHit()
+            return cachedImage
+        }
+        
+        // Check disk cache
+        let cacheURL = cacheDirectory.appendingPathComponent(key)
+        if let image = NSImage(contentsOf: cacheURL) {
+            cache.setObject(image, forKey: key as NSString)
+            PerformanceMonitor.shared.recordCacheHit()
+            return image
+        }
+        
+        PerformanceMonitor.shared.recordCacheMiss()
+        return nil
+    }
+    
+    func setImage(_ image: NSImage, for url: URL, size: CGFloat) {
+        let key = cacheKey(for: url, size: size)
+        
+        // Store in memory cache
+        cache.setObject(image, forKey: key as NSString)
+        
+        // Store in disk cache
+        let cacheURL = cacheDirectory.appendingPathComponent(key)
+        if let data = image.tiffRepresentation {
+            try? data.write(to: cacheURL)
+        }
+    }
+    
+    private func cacheKey(for url: URL, size: CGFloat) -> String {
+        let filename = url.lastPathComponent
+        let sizeString = String(format: "%.0f", size)
+        return "\(filename)_\(sizeString)"
+    }
+    
+    func clearCache() {
+        cache.removeAllObjects()
+        try? fileManager.removeItem(at: cacheDirectory)
+        try? fileManager.createDirectory(at: cacheDirectory, withIntermediateDirectories: true)
+    }
+}
+
+// MARK: - Optimized Image Loading
+struct OptimizedAsyncImage: View {
+    let url: URL
+    let size: CGFloat
+    @State private var image: NSImage?
+    @State private var isLoading = false
+    @State private var hasError = false
+    
+    var body: some View {
+        Group {
+            if let image = image {
+                Image(nsImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+            } else if isLoading {
+                ProgressView()
+                    .scaleEffect(0.5)
+            } else if hasError {
+                Image(systemName: "photo")
+                    .foregroundColor(.secondary)
+                    .font(.system(size: size * 0.3))
+            } else {
+                Color.gray.opacity(0.1)
+            }
+        }
+        .onAppear {
+            loadImage()
+        }
+    }
+    
+    private func loadImage() {
+        // Check cache first
+        if let cachedImage = ImageCache.shared.getImage(for: url, size: size) {
+            self.image = cachedImage
+            return
+        }
+        
+        // Load from disk
+        isLoading = true
+        hasError = false
+        
+        DispatchQueue.global(qos: .userInitiated).async {
+            let image = loadAndResizeImage()
+            DispatchQueue.main.async {
+                self.isLoading = false
+                if let image = image {
+                    self.image = image
+                    ImageCache.shared.setImage(image, for: url, size: size)
+                } else {
+                    self.hasError = true
+                }
+            }
+        }
+    }
+    
+    private func loadAndResizeImage() -> NSImage? {
+        guard let sourceImage = NSImage(contentsOf: url) else { return nil }
+        
+        // Create thumbnail at the requested size
+        let targetSize = NSSize(width: size, height: size)
+        let thumbnail = NSImage(size: targetSize)
+        
+        thumbnail.lockFocus()
+        sourceImage.draw(in: NSRect(origin: .zero, size: targetSize),
+                        from: NSRect(origin: .zero, size: sourceImage.size),
+                        operation: .copy,
+                        fraction: 1.0)
+        thumbnail.unlockFocus()
+        
+        return thumbnail
+    }
+}
+
 struct ImageFile: Identifiable, Equatable, Hashable {
     let id = UUID()
     let url: URL
@@ -35,6 +208,7 @@ struct ContentView: View {
     @State private var previewedImageFile: ImageFile?
     @State private var scrollToID: UUID?
     @State private var gridColumnCount: Int = 1
+    @State private var showCacheMenu: Bool = false
     
     let supportedExtensions = ["jpg", "jpeg", "png", "pdf", "svg", "gif", "tiff"]
     
@@ -188,19 +362,30 @@ struct ContentView: View {
     }
     
     private func loadImages(from folderURLs: [URL]) {
-        var newImageFiles: [ImageFile] = []
-        let fileManager = FileManager.default
+        // Clear current images first for better performance
+        imageFiles = []
         
-        for folderURL in folderURLs {
-            if let enumerator = fileManager.enumerator(at: folderURL, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles, .skipsPackageDescendants]) {
-                for case let fileURL as URL in enumerator {
-                    if supportedExtensions.contains(fileURL.pathExtension.lowercased()) {
-                        newImageFiles.append(ImageFile(url: fileURL))
+        DispatchQueue.global(qos: .userInitiated).async {
+            var newImageFiles: [ImageFile] = []
+            let fileManager = FileManager.default
+            
+            for folderURL in folderURLs {
+                if let enumerator = fileManager.enumerator(at: folderURL, includingPropertiesForKeys: [.isRegularFileKey], options: [.skipsHiddenFiles, .skipsPackageDescendants]) {
+                    for case let fileURL as URL in enumerator {
+                        if supportedExtensions.contains(fileURL.pathExtension.lowercased()) {
+                            newImageFiles.append(ImageFile(url: fileURL))
+                        }
                     }
                 }
             }
+            
+            // Sort files by name for consistent ordering
+            newImageFiles.sort { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
+            
+            DispatchQueue.main.async {
+                self.imageFiles = newImageFiles
+            }
         }
-        imageFiles = newImageFiles
     }
     
     private func handleImageSelection(for fileID: UUID) {
@@ -220,6 +405,13 @@ struct ContentView: View {
     }
     
     private func moveFilesToTrash(_ files: [ImageFile]) {
+        let deletedIDs = Set(files.map { $0.id })
+        let wasPreviewedDeleted = previewedImageFile != nil && deletedIDs.contains(previewedImageFile!.id)
+        var previewIndex: Int? = nil
+        if wasPreviewedDeleted, let current = previewedImageFile, let idx = imageFiles.firstIndex(of: current) {
+            previewIndex = idx
+        }
+        
         for file in files {
             do {
                 try FileManager.default.trashItem(at: file.url, resultingItemURL: nil)
@@ -227,6 +419,26 @@ struct ContentView: View {
                 selectedImageFileIDs.remove(file.id)
             } catch {
                 print("Error moving file to trash: \(error)")
+            }
+        }
+        
+        // Handle preview advance
+        if wasPreviewedDeleted {
+            let remaining = imageFiles
+            if let idx = previewIndex {
+                // Try next image, else previous, else nil
+                let nextIdx = idx < remaining.count ? idx : (remaining.count - 1)
+                if nextIdx >= 0, nextIdx < remaining.count {
+                    let nextFile = remaining[nextIdx]
+                    previewedImageFile = nextFile
+                    selectedImageFileIDs = [nextFile.id]
+                    lastSelectedImageFileID = nextFile.id
+                    scrollToID = nextFile.id
+                } else {
+                    previewedImageFile = nil
+                }
+            } else {
+                previewedImageFile = nil
             }
         }
     }
@@ -499,7 +711,7 @@ struct ContentView: View {
         var body: some View {
             ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVGrid(columns: Array(repeating: .init(.flexible()), count: columnCount), spacing: 20) {
+                    LazyVGrid(columns: Array(repeating: .init(.flexible(), spacing: 20), count: columnCount), spacing: 20) {
                         ForEach(imageFiles) { file in
                             VStack {
                                 FileThumbnailView(file: file, size: thumbnailSizeValue, onRename: onRename)
@@ -518,13 +730,17 @@ struct ContentView: View {
                             .background(selectedImageFileIDs.contains(file.id) ? Color.accentColor.opacity(0.2) : Color.clear)
                             .cornerRadius(8)
                             .id(file.id)
+                            .onAppear {
+                                // Prefetch next few images
+                                prefetchNearbyImages(for: file)
+                            }
                         }
                     }
                     .padding()
                 }
                 .onChange(of: scrollToID) { _, newID in
                     if let id = newID {
-                        withAnimation {
+                        withAnimation(.easeInOut(duration: 0.3)) {
                             proxy.scrollTo(id, anchor: .center)
                         }
                         DispatchQueue.main.async {
@@ -537,6 +753,23 @@ struct ContentView: View {
                 }
                 .onAppear {
                     updateColumnCount(for: thumbnailSize)
+                }
+            }
+        }
+        
+        private func prefetchNearbyImages(for file: ImageFile) {
+            guard let currentIndex = imageFiles.firstIndex(where: { $0.id == file.id }) else { return }
+            
+            // Prefetch next 5 images
+            let prefetchRange = (currentIndex + 1)..<min(currentIndex + 6, imageFiles.count)
+            for index in prefetchRange {
+                let prefetchFile = imageFiles[index]
+                if prefetchFile.url.pathExtension.lowercased() != "pdf" && 
+                   prefetchFile.url.pathExtension.lowercased() != "svg" {
+                    // Trigger cache load for nearby images
+                    DispatchQueue.global(qos: .background).async {
+                        _ = ImageCache.shared.getImage(for: prefetchFile.url, size: thumbnailSizeValue)
+                    }
                 }
             }
         }
@@ -588,17 +821,38 @@ struct ContentView: View {
                         }
                         .background(selectedImageFileIDs.contains(file.id) ? Color.accentColor.opacity(0.2) : Color.clear)
                         .id(file.id)
+                        .onAppear {
+                            // Prefetch nearby images in list view
+                            prefetchNearbyImages(for: file)
+                        }
                     }
                 }
                 .listStyle(PlainListStyle())
                 .onChange(of: scrollToID) { _, newID in
                     if let id = newID {
-                        withAnimation {
+                        withAnimation(.easeInOut(duration: 0.3)) {
                             proxy.scrollTo(id, anchor: .center)
                         }
                         DispatchQueue.main.async {
                             scrollToID = nil
                         }
+                    }
+                }
+            }
+        }
+        
+        private func prefetchNearbyImages(for file: ImageFile) {
+            guard let currentIndex = imageFiles.firstIndex(where: { $0.id == file.id }) else { return }
+            
+            // Prefetch next 10 images in list view (more since list view shows more items)
+            let prefetchRange = (currentIndex + 1)..<min(currentIndex + 11, imageFiles.count)
+            for index in prefetchRange {
+                let prefetchFile = imageFiles[index]
+                if prefetchFile.url.pathExtension.lowercased() != "pdf" && 
+                   prefetchFile.url.pathExtension.lowercased() != "svg" {
+                    // Trigger cache load for nearby images
+                    DispatchQueue.global(qos: .background).async {
+                        _ = ImageCache.shared.getImage(for: prefetchFile.url, size: 40)
                     }
                 }
             }
@@ -676,14 +930,9 @@ struct FileThumbnailView: View {
         } else if file.url.pathExtension.lowercased() == "svg" {
             SVGThumbnailView(url: file.url)
         } else {
-            AsyncImage(url: file.url) { image in
-                image.resizable()
-                    .aspectRatio(contentMode: .fill)
-            } placeholder: {
-                Color.gray.opacity(0.1)
-            }
-            .frame(width: size, height: size)
-            .clipped()
+            OptimizedAsyncImage(url: file.url, size: size)
+                .frame(width: size, height: size)
+                .clipped()
         }
     }
 }
@@ -708,6 +957,12 @@ struct PDFThumbnailView: View {
     }
 
     private func generateThumbnail() {
+        // Check cache first
+        if let cachedImage = ImageCache.shared.getImage(for: url, size: size) {
+            self.thumbnail = cachedImage
+            return
+        }
+        
         DispatchQueue.global(qos: .userInitiated).async {
             guard let pdfDocument = PDFDocument(url: url),
                   let page = pdfDocument.page(at: 0) else {
@@ -716,6 +971,7 @@ struct PDFThumbnailView: View {
             let image = page.thumbnail(of: .init(width: size * 2, height: size * 2), for: .cropBox)
             DispatchQueue.main.async {
                 self.thumbnail = image
+                ImageCache.shared.setImage(image, for: url, size: size)
             }
         }
     }
