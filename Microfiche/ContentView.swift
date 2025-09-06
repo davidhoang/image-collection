@@ -336,7 +336,7 @@ struct ImageDetailView: View {
                                 TextEditor(text: $comments)
                                     .frame(minHeight: 100)
                                     .textFieldStyle(RoundedBorderTextFieldStyle())
-                                    .onChange(of: comments) { _, _ in
+                                    .onChange(of: comments) { _ in
                                         saveMetadata()
                                     }
                             } else {
@@ -373,7 +373,7 @@ struct ImageDetailView: View {
                                     .onSubmit {
                                         saveMetadata()
                                     }
-                                    .onChange(of: whereFrom) { _, _ in
+                                    .onChange(of: whereFrom) { _ in
                                         saveMetadata()
                                     }
                             } else {
@@ -439,59 +439,52 @@ struct ImageDetailView: View {
     
     private func loadMetadata() {
         // Load saved metadata from file system attributes
-        do {
-            print("🔍 Attempting to load metadata for: \(file.name)")
-            print("📁 File path: \(file.url.path)")
-            
-            var loadedFromFileSystem = false
-            
-            // Try to load from extended attributes first
-            if let tagsData = try? file.url.extendedAttribute(forName: "com.microfiche.tags"),
-               let tagsString = String(data: tagsData, encoding: .utf8) {
-                tags = tagsString.components(separatedBy: ",").filter { !$0.isEmpty }
-                print("✅ Loaded tags: \(tags)")
-                loadedFromFileSystem = true
-            } else {
-                print("ℹ️ No tags found or error loading tags")
-            }
-            
-            if let labelsData = try? file.url.extendedAttribute(forName: "com.microfiche.labels"),
-               let labelsString = String(data: labelsData, encoding: .utf8) {
-                labels = labelsString.components(separatedBy: ",").filter { !$0.isEmpty }
-                print("✅ Loaded labels: \(labels)")
-                loadedFromFileSystem = true
-            } else {
-                print("ℹ️ No labels found or error loading labels")
-            }
-            
-            if let commentsData = try? file.url.extendedAttribute(forName: "com.microfiche.comments"),
-               let commentsString = String(data: commentsData, encoding: .utf8) {
-                comments = commentsString
-                print("✅ Loaded comments: \(comments)")
-                loadedFromFileSystem = true
-            } else {
-                print("ℹ️ No comments found or error loading comments")
-            }
-            
-            if let whereFromData = try? file.url.extendedAttribute(forName: "com.microfiche.whereFrom"),
-               let whereFromString = String(data: whereFromData, encoding: .utf8) {
-                whereFrom = whereFromString
-                print("✅ Loaded whereFrom: \(whereFrom)")
-                loadedFromFileSystem = true
-            } else {
-                print("ℹ️ No whereFrom found or error loading whereFrom")
-            }
-            
-            if loadedFromFileSystem {
-                print("✅ Metadata loaded from file system for \(file.name)")
-            } else {
-                print("🔄 No file system metadata found, trying UserDefaults")
-                loadFromUserDefaults()
-            }
-            
-        } catch {
-            print("❌ Error loading metadata from file system for \(file.name): \(error)")
-            print("🔄 Falling back to UserDefaults")
+        print("🔍 Attempting to load metadata for: \(file.name)")
+        print("📁 File path: \(file.url.path)")
+        
+        var loadedFromFileSystem = false
+        
+        // Try to load from extended attributes first
+        if let tagsData = try? file.url.extendedAttribute(forName: "com.microfiche.tags"),
+           let tagsString = String(data: tagsData, encoding: .utf8) {
+            tags = tagsString.components(separatedBy: ",").filter { !$0.isEmpty }
+            print("✅ Loaded tags: \(tags)")
+            loadedFromFileSystem = true
+        } else {
+            print("ℹ️ No tags found or error loading tags")
+        }
+        
+        if let labelsData = try? file.url.extendedAttribute(forName: "com.microfiche.labels"),
+           let labelsString = String(data: labelsData, encoding: .utf8) {
+            labels = labelsString.components(separatedBy: ",").filter { !$0.isEmpty }
+            print("✅ Loaded labels: \(labels)")
+            loadedFromFileSystem = true
+        } else {
+            print("ℹ️ No labels found or error loading labels")
+        }
+        
+        if let commentsData = try? file.url.extendedAttribute(forName: "com.microfiche.comments"),
+           let commentsString = String(data: commentsData, encoding: .utf8) {
+            comments = commentsString
+            print("✅ Loaded comments: \(comments)")
+            loadedFromFileSystem = true
+        } else {
+            print("ℹ️ No comments found or error loading comments")
+        }
+        
+        if let whereFromData = try? file.url.extendedAttribute(forName: "com.microfiche.whereFrom"),
+           let whereFromString = String(data: whereFromData, encoding: .utf8) {
+            whereFrom = whereFromString
+            print("✅ Loaded whereFrom: \(whereFrom)")
+            loadedFromFileSystem = true
+        } else {
+            print("ℹ️ No whereFrom found or error loading whereFrom")
+        }
+        
+        if loadedFromFileSystem {
+            print("✅ Metadata loaded from file system for \(file.name)")
+        } else {
+            print("🔄 No file system metadata found, trying UserDefaults")
             loadFromUserDefaults()
         }
     }
@@ -711,7 +704,7 @@ struct ContentView: View {
                 .onAppear {
                     // Optionally, load persisted folders here
                 }
-                .onChange(of: selection) { oldValue, newValue in
+                .onChange(of: selection) { newValue in
                     switch newValue {
                     case .all:
                         loadImages(from: folderURLs)
@@ -723,16 +716,18 @@ struct ContentView: View {
                     selectedImageFileIDs = []
                     lastSelectedImageFileID = nil
                 }
-                .onChange(of: showDeleteAlert) { _, isShowing in
+                .onChange(of: showDeleteAlert) { isShowing in
                     if !isShowing {
                         pendingDeleteFiles = []
                     }
                 }
                 .background(KeyboardEventHandlingView(
-                    onDeletePressed: {
+                    onDeletePressed: { bypassConfirmation in
                         let filesToDelete = imageFiles.filter { selectedImageFileIDs.contains($0.id) }
                         if !filesToDelete.isEmpty {
-                            if dontAskAgain {
+                            if bypassConfirmation {
+                                moveFilesToTrash(filesToDelete)
+                            } else if dontAskAgain {
                                 moveFilesToTrash(filesToDelete)
                             } else {
                                 pendingDeleteFiles = filesToDelete
@@ -876,6 +871,11 @@ struct ContentView: View {
         if wasPreviewedDeleted, let current = previewedImageFile, let idx = imageFiles.firstIndex(of: current) {
             previewIndex = idx
         }
+        // Capture an anchor index among the items being deleted to decide the next selection afterwards
+        let originalFilesSnapshot = imageFiles
+        let anchorIndexBeforeDeletion: Int? = files
+            .compactMap { file in originalFilesSnapshot.firstIndex(of: file) }
+            .min()
         
         for file in files {
             do {
@@ -904,6 +904,30 @@ struct ContentView: View {
                 }
             } else {
                 previewedImageFile = nil
+            }
+        } else {
+            // Not in preview: select the next logical item
+            let remaining = imageFiles
+            let idx = anchorIndexBeforeDeletion
+            if let idx = idx {
+                // Prefer the same position if available, else previous
+                let candidate = idx < remaining.count ? idx : (remaining.count - 1)
+                if candidate >= 0, remaining.indices.contains(candidate) {
+                    let nextFile = remaining[candidate]
+                    selectedImageFileIDs = [nextFile.id]
+                    lastSelectedImageFileID = nextFile.id
+                    scrollToID = nextFile.id
+                } else {
+                    selectedImageFileIDs = []
+                    lastSelectedImageFileID = nil
+                }
+            } else if let first = remaining.first {
+                selectedImageFileIDs = [first.id]
+                lastSelectedImageFileID = first.id
+                scrollToID = first.id
+            } else {
+                selectedImageFileIDs = []
+                lastSelectedImageFileID = nil
             }
         }
     }
@@ -1035,8 +1059,8 @@ struct ContentView: View {
                     isEditing = false
                 })
                 .focused($isFocused)
-                .onChange(of: isFocused) { oldValue, newValue in
-                    if !newValue {
+                .onChange(of: isFocused) { isFocused in
+                    if !isFocused {
                         isEditing = false
                     }
                 }
@@ -1194,82 +1218,53 @@ struct ContentView: View {
         var body: some View {
             ScrollViewReader { proxy in
                 ScrollView {
-                    ZStack {
-                        // Adaptive microfiche sheet background
-                        Color(nsColor: NSColor.windowBackgroundColor)
-                            .opacity(0.7)
-                            .edgesIgnoringSafeArea(.all)
-                        LazyVGrid(columns: Array(repeating: .init(.flexible(), spacing: 20), count: columnCount), spacing: 20) {
-                            ForEach(imageFiles) { file in
-                                VStack {
-                                    FileThumbnailView(file: file, size: thumbnailSizeValue, onRename: onRename)
-                                        .frame(width: thumbnailSizeValue, height: thumbnailSizeValue)
-                                }
-                                .padding(6)
-                                .background(
-                                    RoundedRectangle(cornerRadius: 10)
-                                        .fill(Color(NSColor.controlBackgroundColor))
-                                )
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 10)
-                                        .stroke(
-                                            selectedImageFileIDs.contains(file.id) ? Color.accentColor : Color(NSColor.separatorColor),
-                                            lineWidth: selectedImageFileIDs.contains(file.id) ? 4 : 3
-                                        )
-                                        .shadow(color: selectedImageFileIDs.contains(file.id) ? Color.accentColor.opacity(0.4) : .clear, radius: selectedImageFileIDs.contains(file.id) ? 10 : 0)
-                                )
-                                .simultaneousGesture(
-                                    TapGesture(count: 1)
-                                        .onEnded { _ in
-                                            onSelectImage(file.id)
-                                        }
-                                )
-                                .simultaneousGesture(
-                                    TapGesture(count: 2)
-                                        .onEnded { _ in
-                                            onDoubleClickImage(file.id)
-                                        }
-                                )
-                                .id(file.id)
-                                .onAppear {
-                                    prefetchNearbyImages(for: file)
-                                }
-                            }
+                    LazyVGrid(columns: gridColumns, spacing: 20) {
+                        ForEach(imageFiles) { file in
+                            GridCell(
+                                file: file,
+                                isSelected: selectedImageFileIDs.contains(file.id),
+                                size: thumbnailSizeValue,
+                                onSelectImage: onSelectImage,
+                                onDoubleClickImage: onDoubleClickImage,
+                                onRename: onRename
+                            )
+                            .id(file.id)
+                            .onAppear { prefetchNearbyImages(for: file) }
                         }
-                        .padding(.horizontal, 32)
-                        .padding(.vertical, 56)
                     }
+                    .padding(.horizontal, 32)
+                    .padding(.vertical, 56)
                 }
-                .onChange(of: scrollToID) { _, newID in
+                .onChange(of: scrollToID) { newID in
                     if let id = newID {
                         withAnimation(.easeInOut(duration: 0.3)) {
                             proxy.scrollTo(id, anchor: .center)
                         }
-                        DispatchQueue.main.async {
-                            scrollToID = nil
-                        }
+                        DispatchQueue.main.async { scrollToID = nil }
                     }
                 }
-                .onChange(of: thumbnailSize) { _, newSize in
-                    updateColumnCount(for: newSize)
-                }
-                .onAppear {
+                .onChange(of: thumbnailSize) { _ in
                     updateColumnCount(for: thumbnailSize)
                 }
+                .onAppear { updateColumnCount(for: thumbnailSize) }
             }
             .animation(.spring(), value: thumbnailSize)
         }
         
+        private func updateColumnCount(for size: GridThumbnailSize) {
+            columnCount = size == .large ? 4 : (size == .medium ? 5 : 8)
+        }
+        
+        private var gridColumns: [GridItem] {
+            Array(repeating: GridItem(.flexible(), spacing: 20), count: max(1, columnCount))
+        }
+        
         private func prefetchNearbyImages(for file: ImageFile) {
             guard let currentIndex = imageFiles.firstIndex(where: { $0.id == file.id }) else { return }
-            
-            // Prefetch next 5 images
             let prefetchRange = (currentIndex + 1)..<min(currentIndex + 6, imageFiles.count)
             for index in prefetchRange {
                 let prefetchFile = imageFiles[index]
-                if prefetchFile.url.pathExtension.lowercased() != "pdf" && 
-                   prefetchFile.url.pathExtension.lowercased() != "svg" {
-                    // Trigger cache load for nearby images
+                if prefetchFile.url.pathExtension.lowercased() != "pdf" && prefetchFile.url.pathExtension.lowercased() != "svg" {
                     DispatchQueue.global(qos: .background).async {
                         _ = ImageCache.shared.getImage(for: prefetchFile.url, size: thumbnailSizeValue)
                     }
@@ -1277,15 +1272,39 @@ struct ContentView: View {
             }
         }
         
-        private func updateColumnCount(for size: GridThumbnailSize) {
-            columnCount = size == .large ? 4 : (size == .medium ? 5 : 8)
-        }
-        
         private var thumbnailSizeValue: CGFloat {
             switch thumbnailSize {
             case .small: return 80
             case .medium: return 120
             case .large: return 180
+            }
+        }
+        
+        private struct GridCell: View {
+            let file: ImageFile
+            let isSelected: Bool
+            let size: CGFloat
+            let onSelectImage: (UUID) -> Void
+            let onDoubleClickImage: (UUID) -> Void
+            let onRename: (URL, String) -> Void
+            var body: some View {
+                VStack {
+                    FileThumbnailView(file: file, size: size, onRename: onRename)
+                        .frame(width: size, height: size)
+                }
+                .padding(6)
+                .background(
+                    RoundedRectangle(cornerRadius: 10)
+                        .fill(Color(NSColor.controlBackgroundColor))
+                )
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10)
+                        .stroke(isSelected ? Color.accentColor : Color(NSColor.separatorColor), lineWidth: isSelected ? 4 : 3)
+                )
+                .shadow(color: isSelected ? Color.accentColor.opacity(0.4) : .clear, radius: isSelected ? 10 : 0)
+                .contentShape(Rectangle())
+                .onTapGesture(count: 2) { onDoubleClickImage(file.id) }
+                .onTapGesture { onSelectImage(file.id) }
             }
         }
     }
@@ -1341,7 +1360,7 @@ struct ContentView: View {
                     }
                 }
                 .listStyle(PlainListStyle())
-                .onChange(of: scrollToID) { _, newID in
+                .onChange(of: scrollToID) { newID in
                     if let id = newID {
                         withAnimation(.easeInOut(duration: 0.3)) {
                             proxy.scrollTo(id, anchor: .center)
@@ -1531,7 +1550,7 @@ struct SVGThumbnailView: View {
 }
 
 struct KeyboardEventHandlingView: NSViewRepresentable {
-    var onDeletePressed: () -> Void
+    var onDeletePressed: (_ bypassConfirmation: Bool) -> Void
     var onEscapePressed: () -> Void
     var onSpacebarPressed: () -> Void
     var onArrowPressed: (ContentView.ArrowDirection) -> Void
@@ -1552,7 +1571,7 @@ struct KeyboardEventHandlingView: NSViewRepresentable {
     }
     
     class KeyView: NSView {
-        var onDeletePressed: (() -> Void)?
+        var onDeletePressed: ((Bool) -> Void)?
         var onEscapePressed: (() -> Void)?
         var onSpacebarPressed: (() -> Void)?
         var onArrowPressed: ((ContentView.ArrowDirection) -> Void)?
@@ -1561,8 +1580,9 @@ struct KeyboardEventHandlingView: NSViewRepresentable {
         
         override func keyDown(with event: NSEvent) {
             switch event.keyCode {
-            case 51: // Backspace/Delete
-                onDeletePressed?()
+            case 51, 117: // 51: Delete, 117: Forward Delete
+                let bypass = event.modifierFlags.contains(.command)
+                onDeletePressed?(bypass)
             case 53: // Escape
                 onEscapePressed?()
             case 49: // Spacebar
