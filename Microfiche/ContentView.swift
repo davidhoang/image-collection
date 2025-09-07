@@ -1143,6 +1143,7 @@ struct ContentView: View {
         let onDoubleClickImage: (UUID) -> Void
         @Binding var scrollToID: UUID?
         let onRename: (URL, String) -> Void
+        @State private var lastKnownWidth: CGFloat = 0
         var body: some View {
             VStack {
                 if imageFiles.isEmpty {
@@ -1179,6 +1180,9 @@ struct ContentView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(WidthReader { width in
+                updateColumns(for: width)
+            })
             .toolbar {
                 ToolbarItem(placement: .principal) {
                     Picker("View", selection: $viewMode) {
@@ -1202,6 +1206,27 @@ struct ContentView: View {
                     }
                 }
             }
+            .onChange(of: gridThumbnailSize) { _ in
+                updateColumns(for: lastKnownWidth)
+            }
+        }
+        
+        private func updateColumns(for width: CGFloat) {
+            lastKnownWidth = width
+            // Match paddings/spacings used by grid
+            let horizontalPadding: CGFloat = 64 // 32 leading + 32 trailing
+            let spacing: CGFloat = 20
+            let thumb: CGFloat = {
+                switch gridThumbnailSize {
+                case .small: return 80
+                case .medium: return 120
+                case .large: return 180
+                }
+            }()
+            let itemOuterWidth: CGFloat = thumb + 12 // thumbnail + cell padding (6 each side)
+            let usableWidth = max(0, width - horizontalPadding)
+            let computed = max(1, Int( (usableWidth + spacing) / (itemOuterWidth + spacing) ))
+            if computed != gridColumnCount { gridColumnCount = computed }
         }
     }
     
@@ -1243,16 +1268,8 @@ struct ContentView: View {
                         DispatchQueue.main.async { scrollToID = nil }
                     }
                 }
-                .onChange(of: thumbnailSize) { _ in
-                    updateColumnCount(for: thumbnailSize)
-                }
-                .onAppear { updateColumnCount(for: thumbnailSize) }
             }
             .animation(.spring(), value: thumbnailSize)
-        }
-        
-        private func updateColumnCount(for size: GridThumbnailSize) {
-            columnCount = size == .large ? 4 : (size == .medium ? 5 : 8)
         }
         
         private var gridColumns: [GridItem] {
@@ -1388,6 +1405,20 @@ struct ContentView: View {
                     }
                 }
             }
+        }
+    }
+}
+
+// Helper to read available width without complicating layout trees
+private struct WidthReader: View {
+    let onChange: (CGFloat) -> Void
+    var body: some View {
+        GeometryReader { geo in
+            Color.clear
+                .onAppear { onChange(geo.size.width) }
+                .onChange(of: geo.size.width) { newWidth in
+                    onChange(newWidth)
+                }
         }
     }
 }
