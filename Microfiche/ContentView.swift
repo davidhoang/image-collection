@@ -810,7 +810,7 @@ struct ContentView: View {
             }
         }
         .animation(.easeInOut(duration: 0.3), value: detailViewFile)
-        .animation(.easeInOut(duration: 0.2), value: previewedImageFile)
+        .animation(.easeInOut(duration: 0.08), value: previewedImageFile)
     }
 
     private func linkFolder() {
@@ -910,6 +910,16 @@ struct ContentView: View {
             selectedImageFileIDs = [fileID]
         }
         lastSelectedImageFileID = fileID
+
+        // Preload the selected image for instant preview
+        if let file = imageFiles.first(where: { $0.id == fileID }) {
+            preloadImageForPreview(file: file)
+        }
+    }
+
+    private func preloadImageForPreview(file: ImageFile) {
+        // Preload using preview cache for instant display
+        PreviewImageCache.shared.preloadImage(for: file.url)
     }
     
     private func handleDoubleClickImage(for fileID: UUID) {
@@ -1652,6 +1662,8 @@ private struct WidthReader: View {
 struct PreviewView: View {
     let file: ImageFile
     let onDismiss: () -> Void
+    @State private var previewImage: NSImage?
+    @State private var isLoading = true
 
     var body: some View {
         GeometryReader { geometry in
@@ -1676,10 +1688,11 @@ struct PreviewView: View {
                                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                                     .aspectRatio(contentMode: .fit)
                             } else {
-                                AsyncImage(url: file.url) { image in
-                                    image.resizable()
-                                         .aspectRatio(contentMode: .fit)
-                                } placeholder: {
+                                if let image = previewImage {
+                                    Image(nsImage: image)
+                                        .resizable()
+                                        .aspectRatio(contentMode: .fit)
+                                } else if isLoading {
                                     ProgressView()
                                 }
                             }
@@ -1690,6 +1703,24 @@ struct PreviewView: View {
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
+        }
+        .onAppear {
+            loadPreviewImage()
+        }
+    }
+
+    private func loadPreviewImage() {
+        // Check cache first for instant display
+        if let cached = PreviewImageCache.shared.getImage(for: file.url) {
+            self.previewImage = cached
+            self.isLoading = false
+            return
+        }
+
+        // If not cached, load it
+        PreviewImageCache.shared.preloadImage(for: file.url) { image in
+            self.previewImage = image
+            self.isLoading = false
         }
     }
 }
