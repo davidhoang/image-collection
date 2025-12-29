@@ -7,6 +7,7 @@
 import SwiftUI
 import PDFKit
 import ImageIO
+import UniformTypeIdentifiers
 
 
 
@@ -639,12 +640,14 @@ struct ContentView: View {
     @State private var gridColumnCount: Int = 1
     @State private var showCacheMenu: Bool = false
     @State private var detailViewFile: ImageFile?
-    
+    @StateObject private var contactSheetStorage = ContactSheetStorage.shared
+
     let supportedExtensions = ["jpg", "jpeg", "png", "pdf", "svg", "gif", "tiff"]
     
     enum Selection: Hashable {
         case all
         case folder(URL)
+        case contactSheet(UUID)
     }
     
     enum ViewMode: String, CaseIterable, Identifiable {
@@ -680,12 +683,29 @@ struct ContentView: View {
                 NavigationSplitView {
                     SidebarView(
                         folderURLs: folderURLs,
+                        contactSheets: contactSheetStorage.contactSheets,
                         selection: selection,
                         onLinkFolder: linkFolder,
                         onSelect: { newSelection in
                             selection = newSelection
                         },
-                        onRemoveFolder: removeFolder
+                        onRemoveFolder: removeFolder,
+                        onCreateContactSheet: {
+                            let newSheet = contactSheetStorage.createContactSheet()
+                            selection = .contactSheet(newSheet.id)
+                        },
+                        onRenameContactSheet: { id, newName in
+                            contactSheetStorage.renameContactSheet(id: id, newName: newName)
+                        },
+                        onDeleteContactSheet: { id in
+                            contactSheetStorage.deleteContactSheet(id: id)
+                            if selection == .contactSheet(id) {
+                                selection = .all
+                            }
+                        },
+                        onDropToContactSheet: { sheetID, urls in
+                            handleDropToContactSheet(sheetID: sheetID, urls: urls)
+                        }
                     )
                 } detail: {
                     MainContentView(
@@ -697,7 +717,9 @@ struct ContentView: View {
                         onSelectImage: handleImageSelection,
                         onDoubleClickImage: handleDoubleClickImage,
                         scrollToID: $scrollToID,
-                        onRename: renameFile
+                        onRename: renameFile,
+                        contactSheets: contactSheetStorage.contactSheets,
+                        onAddToContactSheet: handleAddToContactSheet
                     )
                 }
                 .navigationTitle("")
@@ -710,6 +732,8 @@ struct ContentView: View {
                         loadImages(from: folderURLs)
                     case .folder(let url):
                         loadImages(from: [url])
+                    case .contactSheet(let id):
+                        imageFiles = contactSheetStorage.getImages(for: id)
                     case .none:
                         imageFiles = []
                     }
@@ -794,7 +818,7 @@ struct ContentView: View {
         openPanel.canChooseFiles = false
         openPanel.canChooseDirectories = true
         openPanel.allowsMultipleSelection = true
-        
+
         if openPanel.runModal() == .OK {
             var added = false
             for url in openPanel.urls {
@@ -812,7 +836,39 @@ struct ContentView: View {
             }
         }
     }
-    
+
+    private func handleDropToContactSheet(sheetID: UUID, urls: [URL]) {
+        for url in urls {
+            // Validate file type
+            guard supportedExtensions.contains(url.pathExtension.lowercased()) else {
+                continue
+            }
+
+            // Add image to contact sheet (copies file to permanent storage)
+            _ = contactSheetStorage.addImage(from: url, to: sheetID)
+        }
+
+        // If this contact sheet is currently selected, refresh the view
+        if selection == .contactSheet(sheetID) {
+            imageFiles = contactSheetStorage.getImages(for: sheetID)
+        }
+    }
+
+    private func handleAddToContactSheet(sheetID: UUID, imageURL: URL) {
+        // Validate file type
+        guard supportedExtensions.contains(imageURL.pathExtension.lowercased()) else {
+            return
+        }
+
+        // Add image to contact sheet (copies file to permanent storage)
+        _ = contactSheetStorage.addImage(from: imageURL, to: sheetID)
+
+        // If this contact sheet is currently selected, refresh the view
+        if selection == .contactSheet(sheetID) {
+            imageFiles = contactSheetStorage.getImages(for: sheetID)
+        }
+    }
+
     private func loadImages(from folderURLs: [URL]) {
         // Clear current images first for better performance
         imageFiles = []
@@ -1077,17 +1133,136 @@ struct ContentView: View {
         }
     }
     
+    private struct ContactSheetSidebarItem: View {
+        let contactSheet: ContactSheet
+        let isSelected: Bool
+        @State private var isEditing: Bool = false
+        @State private var editedName: String
+        @State private var isDropTargeted: Bool = false
+        let onSelect: () -> Void
+        let onRename: (String) -> Void
+        let onDelete: () -> Void
+        let onDrop: ([URL]) -> Void
+
+        init(contactSheet: ContactSheet, isSelected: Bool, onSelect: @escaping () -> Void, onRename: @escaping (String) -> Void, onDelete: @escaping () -> Void, onDrop: @escaping ([URL]) -> Void) {
+            self.contactSheet = contactSheet
+            self.isSelected = isSelected
+            self.onSelect = onSelect
+            self.onRename = onRename
+            self.onDelete = onDelete
+            self.onDrop = onDrop
+            _editedName = State(initialValue: contactSheet.name)
+        }
+
+        var body: some View {
+            HStack {
+                Image(systemName: "square.grid.2x2")
+                if isEditing {
+                    TextField("Name", text: $editedName, onCommit: {
+                        if !editedName.isEmpty {
+                            onRename(editedName)
+                        }
+                        isEditing = false
+                    })
+                    .textFieldStyle(RoundedBorderTextFieldStyle())
+                } else {
+                    Text(contactSheet.name)
+                        .onTapGesture(count: 2) {
+                            isEditing = true
+                        }
+                }
+            }
+            .contentShape(Rectangle())
+            .onTapGesture {
+                if !isEditing {
+                    onSelect()
+                }
+            }
+            .background(isSelected ? Color.accentColor.opacity(0.2) : Color.clear)
+            .overlay(
+                RoundedRectangle(cornerRadius: 4)
+                    .stroke(isDropTargeted ? Color.accentColor : Color.clear, lineWidth: 2)
+            )
+            .onDrop(of: [UTType.fileURL, UTType.url, UTType.image], isTargeted: $isDropTargeted) { providers in
+                handleDrop(providers: providers)
+                return true
+            }
+            .contextMenu {
+                Button("Rename") {
+                    isEditing = true
+                }
+                Button("Delete", role: .destructive) {
+                    onDelete()
+                }
+            }
+        }
+
+        private func handleDrop(providers: [NSItemProvider]) {
+            for provider in providers {
+                // Try different type identifiers
+                let typeIdentifiers = [
+                    UTType.fileURL.identifier,
+                    UTType.url.identifier,
+                    "public.file-url"
+                ]
+
+                for typeIdentifier in typeIdentifiers {
+                    if provider.hasItemConformingToTypeIdentifier(typeIdentifier) {
+                        provider.loadItem(forTypeIdentifier: typeIdentifier, options: nil) { (urlData, error) in
+                            DispatchQueue.main.async {
+                                if let error = error {
+                                    print("Drop error: \(error)")
+                                    return
+                                }
+
+                                var fileURL: URL?
+
+                                if let url = urlData as? URL {
+                                    fileURL = url
+                                } else if let data = urlData as? Data {
+                                    fileURL = URL(dataRepresentation: data, relativeTo: nil)
+                                } else if let path = urlData as? String {
+                                    fileURL = URL(fileURLWithPath: path)
+                                }
+
+                                if let fileURL = fileURL, fileURL.isFileURL {
+                                    print("Dropped file: \(fileURL.path)")
+                                    self.onDrop([fileURL])
+                                }
+                            }
+                        }
+                        break
+                    }
+                }
+            }
+        }
+    }
+
     private struct SidebarView: View {
         let folderURLs: [URL]
+        let contactSheets: [ContactSheet]
         let selection: Selection?
         let onLinkFolder: () -> Void
         let onSelect: (Selection) -> Void
         let onRemoveFolder: (URL) -> Void
+        let onCreateContactSheet: () -> Void
+        let onRenameContactSheet: (UUID, String) -> Void
+        let onDeleteContactSheet: (UUID) -> Void
+        let onDropToContactSheet: (UUID, [URL]) -> Void
+
         var body: some View {
             VStack(alignment: .leading, spacing: 0) {
-                Text("Folders")
-                    .font(.headline)
-                    .padding([.top, .horizontal])
+                HStack {
+                    Text("Folders")
+                        .font(.headline)
+                    Spacer()
+                    Button(action: onLinkFolder) {
+                        Image(systemName: "plus")
+                    }
+                    .buttonStyle(BorderlessButtonStyle())
+                    .help("Add Folder")
+                }
+                .padding([.top, .horizontal])
 
                 List {
                     HStack {
@@ -1099,7 +1274,7 @@ struct ContentView: View {
                         onSelect(.all)
                     }
                     .background(selection == .all ? Color.accentColor.opacity(0.2) : Color.clear)
-                    
+
                     ForEach(folderURLs, id: \.self) { url in
                         HStack {
                             Image(systemName: "folder")
@@ -1118,16 +1293,45 @@ struct ContentView: View {
                     }
                 }
                 .listStyle(SidebarListStyle())
-                Spacer()
+
+                Divider()
+                    .padding(.vertical, 8)
 
                 HStack {
-                    Button(action: onLinkFolder) {
-                        Label("Add Folder", systemImage: "plus")
+                    Text("Contact Sheets")
+                        .font(.headline)
+                    Spacer()
+                    Button(action: onCreateContactSheet) {
+                        Image(systemName: "plus")
                     }
                     .buttonStyle(BorderlessButtonStyle())
-                    .padding()
-                    Spacer()
+                    .help("New Contact Sheet")
                 }
+                .padding([.horizontal])
+
+                List {
+                    ForEach(contactSheets) { sheet in
+                        ContactSheetSidebarItem(
+                            contactSheet: sheet,
+                            isSelected: selection == .contactSheet(sheet.id),
+                            onSelect: {
+                                onSelect(.contactSheet(sheet.id))
+                            },
+                            onRename: { newName in
+                                onRenameContactSheet(sheet.id, newName)
+                            },
+                            onDelete: {
+                                onDeleteContactSheet(sheet.id)
+                            },
+                            onDrop: { urls in
+                                onDropToContactSheet(sheet.id, urls)
+                            }
+                        )
+                    }
+                }
+                .listStyle(SidebarListStyle())
+
+                Spacer()
             }
             .background(Color(NSColor.windowBackgroundColor))
         }
@@ -1143,6 +1347,8 @@ struct ContentView: View {
         let onDoubleClickImage: (UUID) -> Void
         @Binding var scrollToID: UUID?
         let onRename: (URL, String) -> Void
+        let contactSheets: [ContactSheet]
+        let onAddToContactSheet: (UUID, URL) -> Void
         @State private var lastKnownWidth: CGFloat = 0
         var body: some View {
             VStack {
@@ -1158,14 +1364,16 @@ struct ContentView: View {
                 } else {
                     if viewMode == .grid {
                         ImageGridView(
-                            imageFiles: imageFiles, 
-                            selectedImageFileIDs: $selectedImageFileIDs, 
+                            imageFiles: imageFiles,
+                            selectedImageFileIDs: $selectedImageFileIDs,
                             onSelectImage: onSelectImage,
                             onDoubleClickImage: onDoubleClickImage,
-                            thumbnailSize: gridThumbnailSize, 
-                            scrollToID: $scrollToID, 
-                            columnCount: $gridColumnCount, 
-                            onRename: onRename
+                            thumbnailSize: gridThumbnailSize,
+                            scrollToID: $scrollToID,
+                            columnCount: $gridColumnCount,
+                            onRename: onRename,
+                            contactSheets: contactSheets,
+                            onAddToContactSheet: onAddToContactSheet
                         )
                     } else {
                         ImageListView(
@@ -1239,6 +1447,8 @@ struct ContentView: View {
         @Binding var scrollToID: UUID?
         @Binding var columnCount: Int
         let onRename: (URL, String) -> Void
+        let contactSheets: [ContactSheet]
+        let onAddToContactSheet: (UUID, URL) -> Void
         
         var body: some View {
             ScrollViewReader { proxy in
@@ -1251,7 +1461,9 @@ struct ContentView: View {
                                 size: thumbnailSizeValue,
                                 onSelectImage: onSelectImage,
                                 onDoubleClickImage: onDoubleClickImage,
-                                onRename: onRename
+                                onRename: onRename,
+                                contactSheets: contactSheets,
+                                onAddToContactSheet: onAddToContactSheet
                             )
                             .id(file.id)
                             .onAppear { prefetchNearbyImages(for: file) }
@@ -1304,6 +1516,9 @@ struct ContentView: View {
             let onSelectImage: (UUID) -> Void
             let onDoubleClickImage: (UUID) -> Void
             let onRename: (URL, String) -> Void
+            let contactSheets: [ContactSheet]
+            let onAddToContactSheet: (UUID, URL) -> Void
+
             var body: some View {
                 VStack {
                     FileThumbnailView(file: file, size: size, onRename: onRename)
@@ -1322,6 +1537,17 @@ struct ContentView: View {
                 .contentShape(Rectangle())
                 .onTapGesture(count: 2) { onDoubleClickImage(file.id) }
                 .onTapGesture { onSelectImage(file.id) }
+                .contextMenu {
+                    if !contactSheets.isEmpty {
+                        Menu("Add to Contact Sheet") {
+                            ForEach(contactSheets) { sheet in
+                                Button(sheet.name) {
+                                    onAddToContactSheet(sheet.id, file.url)
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }
