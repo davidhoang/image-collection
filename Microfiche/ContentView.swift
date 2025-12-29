@@ -106,7 +106,7 @@ struct OptimizedAsyncImage: View {
 struct ImageDetailView: View {
     let file: ImageFile
     let onBack: () -> Void
-    
+
     @State private var tags: [String] = []
     @State private var labels: [String] = []
     @State private var comments: String = ""
@@ -118,6 +118,8 @@ struct ImageDetailView: View {
     @State private var newTag: String = ""
     @State private var newLabel: String = ""
     @State private var escapeMonitor: Any?
+    @State private var detailImage: NSImage?
+    @State private var isLoadingImage = true
     
     var body: some View {
         VStack(spacing: 0) {
@@ -177,16 +179,20 @@ struct ImageDetailView: View {
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                             .aspectRatio(contentMode: .fit)
                     } else {
-                        AsyncImage(url: file.url) { image in
-                            image.resizable()
-                                 .aspectRatio(contentMode: .fit)
-                        } placeholder: {
+                        if let image = detailImage {
+                            Image(nsImage: image)
+                                .resizable()
+                                .aspectRatio(contentMode: .fit)
+                        } else if isLoadingImage {
                             ProgressView()
                         }
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(Color(NSColor.windowBackgroundColor))
+                .onAppear {
+                    loadDetailImage()
+                }
                 
                 Divider()
                 
@@ -602,6 +608,21 @@ struct ImageDetailView: View {
         }
         return nil
     }
+
+    private func loadDetailImage() {
+        // Check cache first for instant display
+        if let cached = PreviewImageCache.shared.getImage(for: file.url) {
+            self.detailImage = cached
+            self.isLoadingImage = false
+            return
+        }
+
+        // If not cached, load it
+        PreviewImageCache.shared.preloadImage(for: file.url) { image in
+            self.detailImage = image
+            self.isLoadingImage = false
+        }
+    }
 }
 
 struct InfoRow: View {
@@ -734,6 +755,9 @@ struct ContentView: View {
                         loadImages(from: [url])
                     case .contactSheet(let id):
                         imageFiles = contactSheetStorage.getImages(for: id)
+                        // Preload entire contact sheet immediately
+                        let urls = imageFiles.map { $0.url }
+                        PreviewImageCache.shared.preloadLibrary(urls: urls, priority: .userInitiated)
                     case .none:
                         imageFiles = []
                     }
@@ -889,9 +913,12 @@ struct ContentView: View {
             
             // Sort files by name for consistent ordering
             newImageFiles.sort { $0.name.localizedStandardCompare($1.name) == .orderedAscending }
-            
+
             DispatchQueue.main.async {
                 self.imageFiles = newImageFiles
+                // Preload entire library immediately for instant previews
+                let urls = newImageFiles.map { $0.url }
+                PreviewImageCache.shared.preloadLibrary(urls: urls, priority: .userInitiated)
             }
         }
     }
@@ -1284,6 +1311,7 @@ struct ContentView: View {
                         onSelect(.all)
                     }
                     .background(selection == .all ? Color.accentColor.opacity(0.2) : Color.clear)
+                    .listRowSeparator(.hidden)
 
                     ForEach(folderURLs, id: \.self) { url in
                         HStack {
@@ -1295,6 +1323,7 @@ struct ContentView: View {
                             onSelect(.folder(url))
                         }
                         .background(selection == .folder(url) ? Color.accentColor.opacity(0.2) : Color.clear)
+                        .listRowSeparator(.hidden)
                         .contextMenu {
                             Button("Remove Folder", role: .destructive) {
                                 onRemoveFolder(url)
@@ -1302,10 +1331,11 @@ struct ContentView: View {
                         }
                     }
                 }
-                .listStyle(SidebarListStyle())
+                .listStyle(PlainListStyle())
+                .scrollContentBackground(.hidden)
 
-                Divider()
-                    .padding(.vertical, 8)
+                Spacer()
+                    .frame(height: 24)
 
                 HStack {
                     Text("Contact Sheets")
@@ -1337,9 +1367,11 @@ struct ContentView: View {
                                 onDropToContactSheet(sheet.id, urls)
                             }
                         )
+                        .listRowSeparator(.hidden)
                     }
                 }
-                .listStyle(SidebarListStyle())
+                .listStyle(PlainListStyle())
+                .scrollContentBackground(.hidden)
 
                 Spacer()
             }
@@ -1361,7 +1393,11 @@ struct ContentView: View {
         let onAddToContactSheet: (UUID, URL) -> Void
         @State private var lastKnownWidth: CGFloat = 0
         var body: some View {
-            VStack {
+            VStack(spacing: 0) {
+                Divider()
+                    .background(Color(NSColor.separatorColor))
+
+                VStack {
                 if imageFiles.isEmpty {
                     Spacer()
                     Image(systemName: "photo.on.rectangle.angled")
@@ -1387,15 +1423,17 @@ struct ContentView: View {
                         )
                     } else {
                         ImageListView(
-                            imageFiles: imageFiles, 
-                            selectedImageFileIDs: $selectedImageFileIDs, 
+                            imageFiles: imageFiles,
+                            selectedImageFileIDs: $selectedImageFileIDs,
                             onSelectImage: onSelectImage,
                             onDoubleClickImage: onDoubleClickImage,
-                            scrollToID: $scrollToID, 
+                            scrollToID: $scrollToID,
                             onRename: onRename
                         )
                     }
                 }
+                }
+                .padding(16)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(WidthReader { width in
@@ -1424,6 +1462,14 @@ struct ContentView: View {
                     }
                 }
             }
+            .toolbarBackground(Color(NSColor.windowBackgroundColor), for: .windowToolbar)
+            .toolbarBackground(.visible, for: .windowToolbar)
+            .background(Color(NSColor.controlBackgroundColor))
+            .cornerRadius(12)
+            .shadow(color: Color.black.opacity(0.15), radius: 8, x: -2, y: 0)
+            .padding(.leading, 2)
+            .padding(.trailing, 2)
+            .padding(.vertical, 2)
             .onChange(of: gridThumbnailSize) { _ in
                 updateColumns(for: lastKnownWidth)
             }
@@ -1479,8 +1525,8 @@ struct ContentView: View {
                             .onAppear { prefetchNearbyImages(for: file) }
                         }
                     }
-                    .padding(.horizontal, 32)
-                    .padding(.vertical, 56)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 16)
                 }
                 .onChange(of: scrollToID) { newID in
                     if let id = newID {
@@ -1500,6 +1546,8 @@ struct ContentView: View {
         
         private func prefetchNearbyImages(for file: ImageFile) {
             guard let currentIndex = imageFiles.firstIndex(where: { $0.id == file.id }) else { return }
+
+            // Prefetch thumbnails for grid view
             let prefetchRange = (currentIndex + 1)..<min(currentIndex + 6, imageFiles.count)
             for index in prefetchRange {
                 let prefetchFile = imageFiles[index]
@@ -1507,6 +1555,15 @@ struct ContentView: View {
                     DispatchQueue.global(qos: .background).async {
                         _ = ImageCache.shared.getImage(for: prefetchFile.url, size: thumbnailSizeValue)
                     }
+                }
+            }
+
+            // Aggressively prefetch for PREVIEW - preload current and next 5 images
+            let previewRange = currentIndex..<min(currentIndex + 6, imageFiles.count)
+            for index in previewRange {
+                let prefetchFile = imageFiles[index]
+                if prefetchFile.url.pathExtension.lowercased() != "pdf" && prefetchFile.url.pathExtension.lowercased() != "svg" {
+                    PreviewImageCache.shared.preloadImage(for: prefetchFile.url)
                 }
             }
         }
@@ -1628,17 +1685,26 @@ struct ContentView: View {
         
         private func prefetchNearbyImages(for file: ImageFile) {
             guard let currentIndex = imageFiles.firstIndex(where: { $0.id == file.id }) else { return }
-            
-            // Prefetch next 10 images in list view (more since list view shows more items)
+
+            // Prefetch thumbnails for list view (more since list view shows more items)
             let prefetchRange = (currentIndex + 1)..<min(currentIndex + 11, imageFiles.count)
             for index in prefetchRange {
                 let prefetchFile = imageFiles[index]
-                if prefetchFile.url.pathExtension.lowercased() != "pdf" && 
+                if prefetchFile.url.pathExtension.lowercased() != "pdf" &&
                    prefetchFile.url.pathExtension.lowercased() != "svg" {
                     // Trigger cache load for nearby images
                     DispatchQueue.global(qos: .background).async {
                         _ = ImageCache.shared.getImage(for: prefetchFile.url, size: 40)
                     }
+                }
+            }
+
+            // Aggressively prefetch for PREVIEW - preload current and next 5 images
+            let previewRange = currentIndex..<min(currentIndex + 6, imageFiles.count)
+            for index in previewRange {
+                let prefetchFile = imageFiles[index]
+                if prefetchFile.url.pathExtension.lowercased() != "pdf" && prefetchFile.url.pathExtension.lowercased() != "svg" {
+                    PreviewImageCache.shared.preloadImage(for: prefetchFile.url)
                 }
             }
         }
@@ -1869,7 +1935,7 @@ struct KeyboardEventHandlingView: NSViewRepresentable {
         override func keyDown(with event: NSEvent) {
             switch event.keyCode {
             case 51, 117: // 51: Delete, 117: Forward Delete
-                let bypass = event.modifierFlags.contains(.command)
+                let bypass = event.modifierFlags.contains(.command) || event.modifierFlags.contains(.shift)
                 onDeletePressed?(bypass)
             case 53: // Escape
                 onEscapePressed?()

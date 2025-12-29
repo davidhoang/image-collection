@@ -15,9 +15,10 @@ class PreviewImageCache {
     private let processingQueue = DispatchQueue(label: "com.microfiche.previewcache", qos: .userInitiated, attributes: .concurrent)
 
     private init() {
-        // Configure cache limits - store up to 10 preview images (roughly 100-200MB)
-        cache.countLimit = 10
-        cache.totalCostLimit = 200 * 1024 * 1024 // 200MB
+        // Configure cache limits - store up to 100 preview images (roughly 2-5GB)
+        // Aggressive caching for instant previews across entire library
+        cache.countLimit = 100
+        cache.totalCostLimit = 5 * 1024 * 1024 * 1024 // 5GB
     }
 
     func getImage(for url: URL) -> NSImage? {
@@ -96,5 +97,27 @@ class PreviewImageCache {
 
     func clearCache() {
         cache.removeAllObjects()
+    }
+
+    func preloadLibrary(urls: [URL], priority: DispatchQoS.QoSClass = .background) {
+        // Preload entire library in background
+        // Skip PDFs and SVGs as they're rendered on-demand
+        let imageURLs = urls.filter { url in
+            let ext = url.pathExtension.lowercased()
+            return ext != "pdf" && ext != "svg"
+        }
+
+        let preloadQueue = DispatchQueue(label: "com.microfiche.librarypreload", qos: DispatchQoS(qosClass: priority, relativePriority: 0), attributes: .concurrent)
+
+        for url in imageURLs {
+            // Skip if already cached
+            if cache.object(forKey: url as NSURL) != nil {
+                continue
+            }
+
+            preloadQueue.async { [weak self] in
+                self?.preloadImage(for: url)
+            }
+        }
     }
 }
